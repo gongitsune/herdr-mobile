@@ -1,0 +1,97 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare optional fixed debug signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            umask 077
+            signing_path="$RUNNER_TEMP/herdr-debug.keystore"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$signing_path"
+            {
+              printf 'HERDR_DEBUG_KEYSTORE=%s\n' "$signing_path"
+              printf 'HERDR_DEBUG_KEYSTORE_PASSWORD=%s\n' "$KEYSTORE_PASSWORD"
+              printf 'HERDR_DEBUG_KEY_ALIAS=%s\n' "$KEY_ALIAS"
+              printf 'HERDR_DEBUG_KEY_PASSWORD=%s\n' "$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          else
+            echo 'Fixed signing secrets unavailable; using the default Android debug key.'
+          fi
+      - name: Test, assemble and lint
+        run: ./gradlew :core-client:test :app:assembleDebug :app:lintDebug
+      - name: Name APK
+        id: apk
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA:0:7}"
+          apk_name="herdr-mobile-${short_sha}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/$apk_name"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          echo "name=$apk_name" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herdr-mobile-${{ steps.apk.outputs.short_sha }}
+          path: ${{ runner.temp }}/${{ steps.apk.outputs.name }}
+          if-no-files-found: error
+      - name: Remove decoded signing key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/herdr-debug.keystore"
+
+  nightly:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: herdr-mobile-*
+          path: apk
+          merge-multiple: true
+      - name: Replace nightly pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view nightly > /dev/null 2>&1; then
+            gh release delete nightly --yes --cleanup-tag
+          fi
+          gh release create nightly apk/*.apk \
+            --target "$GITHUB_SHA" \
+            --title 'Nightly' \
+            --notes "Debug APK from commit $GITHUB_SHA (run $GITHUB_RUN_NUMBER)." \
+            --prerelease

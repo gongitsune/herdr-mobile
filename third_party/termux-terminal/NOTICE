@@ -1,0 +1,11 @@
+Termux terminal-emulator and terminal-view
+Source: https://github.com/termux/termux-app
+Tag: v0.118.3
+Commit: 5b657c6adf4304e5198951ce815fe0205dcac29c
+
+These two modules are Apache License 2.0 exceptions to the repository's
+GPLv3 license; see UPSTREAM-LICENSE.md (copied verbatim from upstream).
+Includes work from Terminal Emulator for Android by Jack Palevich and
+contributors, and Termux by Fredrik Fornwall and contributors.
+No termux-app or termux-shared application code is included.
+Modifications for herdr-mobile are described in MODIFICATIONS.md.
