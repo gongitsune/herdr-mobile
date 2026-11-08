@@ -49,6 +49,16 @@ jobs:
           else
             echo 'Fixed signing secrets unavailable; using the default Android debug key.'
           fi
+      - name: Download Gradle distribution (with retries)
+        # services.gradle.org redirects to GitHub Releases, which intermittently answers 504.
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            ./gradlew --version && exit 0
+            echo "Gradle download failed (attempt $attempt); retrying in 30s"
+            sleep 30
+          done
+          exit 1
       - name: Test, assemble and lint
         run: ./gradlew :core-client:test :app:assembleDebug :app:lintDebug
       - name: Name APK
