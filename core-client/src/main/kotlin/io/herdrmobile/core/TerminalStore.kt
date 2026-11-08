@@ -1,6 +1,7 @@
 package io.herdrmobile.core
 
 import io.herdrmobile.core.model.*
+import io.herdrmobile.core.rpc.CoreConnection
 import io.herdrmobile.core.wire.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -13,9 +14,12 @@ class TerminalStore(private val client: HcClient, scope: CoroutineScope) {
     private val stale = MutableStateFlow<List<Terminal>>(emptyList())
     /** Last known records while disconnected or awaiting a new snapshot; cleared after snapshot. */
     val staleTerminals: StateFlow<List<Terminal>> = stale.asStateFlow()
+    internal val documentEpoch = MutableStateFlow(0L)
+    internal val snapshotConnection = MutableStateFlow<CoreConnection?>(null)
     init {
         scope.launch {
             client.connections.collectLatest { conn ->
+                snapshotConnection.value = null
                 if (mutable.value.isNotEmpty()) stale.value = mutable.value
                 mutable.value = emptyList()
                 if (conn == null) return@collectLatest
@@ -24,6 +28,7 @@ class TerminalStore(private val client: HcClient, scope: CoroutineScope) {
                     val snapshot = conn.call("events.subscribe", buildJsonObject {}).jsonObject
                     var seq = snapshot["seq"]!!.jsonPrimitive.long
                     replace(snapshot)
+                    snapshotConnection.value = conn
                     val streamId = snapshot["channel"]!!.jsonPrimitive.long
                     channel = streamId
                     val line = ByteArrayOutputStream()
@@ -39,7 +44,11 @@ class TerminalStore(private val client: HcClient, scope: CoroutineScope) {
                                     when (message["method"]!!.jsonPrimitive.content) {
                                         "missed" -> { replace(params); seq = next }
                                         "event" -> if (next > seq) {
-                                            apply(HcJson.decodeFromJsonElement<Event>(params)); seq = next
+                                            val event=HcJson.decodeFromJsonElement<Event>(params)
+                                            apply(event)
+                                            if (event.type == "doc" && (event.data as? JsonObject)?.get("name")?.jsonPrimitive?.content == "herdr-app")
+                                                documentEpoch.value++
+                                            seq = next
                                         }
                                     }
                                 }
@@ -65,6 +74,7 @@ class TerminalStore(private val client: HcClient, scope: CoroutineScope) {
     private fun replace(snapshot: JsonObject) {
         publish(HcJson.decodeFromJsonElement(snapshot["terminals"]!!))
         stale.value = emptyList()
+        documentEpoch.value++
     }
     private fun publish(values: List<Terminal>) { mutable.value = values.sortedWith(compareBy<Terminal> { it.priority }.thenBy { it.id }) }
     internal fun apply(event: Event) {

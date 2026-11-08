@@ -1,0 +1,11 @@
+{"type":"session_meta","ordinal":0,"payload":{"id":"fixture-thread","session_id":"fixture-thread","history_mode":"paginated","cwd":"/fixture"}}
+{"type":"event_msg","ordinal":1,"payload":{"type":"task_started","turn_id":"turn1"}}
+{"type":"item_completed","ordinal":2,"payload":{"turn_id":"turn1","item":{"id":"u1","type":"UserMessage","content":[{"type":"text","text":"Synthetic request"}]}}}
+{"type":"response_item","ordinal":3,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"MUST NOT DUPLICATE"}]}}
+{"type":"item_completed","ordinal":4,"payload":{"turn_id":"turn1","item":{"id":"reason","type":"Reasoning","summary_text":["Synthetic reasoning"]}}}
+{"type":"item_completed","ordinal":5,"payload":{"turn_id":"turn1","item":{"id":"cmd","type":"CommandExecution","command":["echo","fixture"],"aggregated_output":"fixture result","status":"completed","exit_code":0}}}
+{"type":"item_completed","ordinal":6,"payload":{"turn_id":"turn1","item":{"id":"a1","type":"AgentMessage","content":[{"type":"Text","text":"Partial snapshot"}]}}}
+{"type":"item_completed","ordinal":7,"payload":{"turn_id":"turn1","item":{"id":"a1","type":"AgentMessage","content":[{"type":"Text","text":"Final snapshot"}]}}}
+{"type":"item_completed","ordinal":8,"payload":{"turn_id":"turn1","item":{"id":"q","type":"AgentMessage","content":[],"questions":[{"title":"Choose fixture","options":[{"label":"One","description":"First option"}]}]}}}
+{"type":"event_msg","ordinal":9,"payload":{"type":"task_complete","turn_id":"turn1"}}
+{"type":"future_record","ordinal":10,"payload":{"ignored":true}}

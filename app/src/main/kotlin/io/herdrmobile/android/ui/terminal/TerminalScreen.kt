@@ -16,15 +16,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.termux.view.TerminalView
 import io.herdrmobile.android.R
 import io.herdrmobile.android.ui.terminalErrorMessage
+import io.herdrmobile.android.ui.chat.detailSurface
+import io.herdrmobile.android.ui.chat.ChatTimeline
+import io.herdrmobile.android.ui.chat.TranscriptPanel
+import io.herdrmobile.android.ui.chat.CandidatePreview
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(vm: TerminalViewModel, back: () -> Unit) {
     val observe by vm.observe.collectAsStateWithLifecycle()
@@ -39,7 +39,11 @@ fun TerminalScreen(vm: TerminalViewModel, back: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     var confirmKill by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
-    var view by remember { mutableStateOf<TerminalView?>(null) }
+    val chatItems by vm.chatItems.collectAsStateWithLifecycle()
+    val transcript by vm.transcriptState.collectAsStateWithLifecycle()
+    val selected by vm.selectedSurface.collectAsStateWithLifecycle()
+    val blocked by vm.blocked.collectAsStateWithLifecycle()
+    val surface = detailSurface(selected, chatItems)
     Column(Modifier.fillMaxSize().imePadding()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             IconButton(onClick = back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) }
@@ -58,21 +62,19 @@ fun TerminalScreen(vm: TerminalViewModel, back: () -> Unit) {
             Text(error?.let { terminalErrorMessage(it) } ?: stringResource(if (recovering) R.string.terminal_recovering else R.string.attach_closed), Modifier.weight(1f))
             TextButton(onClick = { vm.retryConnection(); retry++ }) { Text(stringResource(R.string.retry)) }
         }
-        key(observe, retry) {
-            AndroidView(factory = { context -> TerminalView(context, null).also { view = it } }, modifier = Modifier.fillMaxWidth().weight(1f))
-        }
-        val lifecycle = LocalLifecycleOwner.current.lifecycle
-        DisposableEffect(view, observe, retry, lifecycle) {
-            val current = view
-            var bound = false
-            fun bind() { if (!bound && current != null) { bound = true; vm.bind(current) } }
-            val observer = LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_START) bind()
-                if (event == Lifecycle.Event.ON_STOP) { bound = false; vm.unbind() }
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+            DetailSurface.entries.forEachIndexed { index, value ->
+                SegmentedButton(selected = surface == value, onClick = { vm.selectedSurface.value = value }, shape = SegmentedButtonDefaults.itemShape(index, 2)) {
+                    Text(stringResource(if (value == DetailSurface.TERMINAL) R.string.terminal else R.string.chat))
+                }
             }
-            lifecycle.addObserver(observer)
-            if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) bind()
-            onDispose { lifecycle.removeObserver(observer); vm.unbind() }
+        }
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            TerminalViewport(vm, Modifier.fillMaxSize(), visible = surface == DetailSurface.TERMINAL, retry = retry)
+            if (surface == DetailSurface.CHAT) Column(Modifier.fillMaxSize()) {
+                TranscriptPanel(vm, transcript)
+                ChatTimeline(chatItems, blocked, ready && !observe && !busy, vm::choose, Modifier.weight(1f).fillMaxWidth())
+            }
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             TextButton(enabled = ready && !observe, onClick = { vm.keyCode(KeyEvent.KEYCODE_ESCAPE) }) { Text(stringResource(R.string.esc)) }
@@ -91,6 +93,7 @@ fun TerminalScreen(vm: TerminalViewModel, back: () -> Unit) {
             IconButton(enabled = ready && !observe && !busy && draft.isNotBlank(), onClick = vm::send) { Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.send)) }
         }
     }
+    CandidatePreview(vm)
     if (confirmKill) AlertDialog(onDismissRequest = { confirmKill = false }, title = { Text(stringResource(R.string.kill)) },
         text = { Text(stringResource(R.string.kill_confirm)) },
         confirmButton = { TextButton(onClick = { confirmKill = false; vm.kill() }) { Text(stringResource(R.string.kill)) } },

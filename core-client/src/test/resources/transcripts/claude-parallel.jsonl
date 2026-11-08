@@ -1,0 +1,6 @@
+{"type":"user","uuid":"u","parentUuid":null,"sessionId":"fixture-session","message":{"content":"Parallel fixture"}}
+{"type":"assistant","uuid":"a","parentUuid":"u","sessionId":"fixture-session","apiBlockIndex":0,"message":{"id":"parallel","content":[{"type":"tool_use","id":"one","name":"Read","input":{}}]}}
+{"type":"assistant","uuid":"b","parentUuid":"a","sessionId":"fixture-session","apiBlockIndex":1,"message":{"id":"parallel","content":[{"type":"tool_use","id":"two","name":"Read","input":{}}]}}
+{"type":"user","uuid":"ra","parentUuid":"a","sessionId":"fixture-session","message":{"content":[{"type":"tool_result","tool_use_id":"one","content":"one result"}]}}
+{"type":"user","uuid":"rb","parentUuid":"b","sessionId":"fixture-session","message":{"content":[{"type":"tool_result","tool_use_id":"two","content":"failed result","is_error":true}]}}
+{"type":"assistant","uuid":"tail","parentUuid":"rb","sessionId":"fixture-session","message":{"id":"tail","content":[{"type":"text","text":"Done"}]}}

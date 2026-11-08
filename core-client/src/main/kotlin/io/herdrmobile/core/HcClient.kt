@@ -1,6 +1,7 @@
 package io.herdrmobile.core
 
 import io.herdrmobile.core.model.*
+import io.herdrmobile.core.files.*
 import io.herdrmobile.core.rpc.*
 import io.herdrmobile.core.wire.*
 import kotlinx.coroutines.*
@@ -208,6 +209,10 @@ class HcClient internal constructor(
 
     suspend fun call(method: String, params: JsonObject): JsonElement =
         (connection ?: throw HcError("io", "Not connected")).call(method, params)
+    suspend fun changes(cwd:String,on:String?=null):ChangeSet = readChanges(this,cwd,on)
+    suspend fun listFiles(cwd:String,path:String=".",on:String?=null):List<FileEntry> = readDirectory(this,cwd,path,on)
+    suspend fun readFile(path:String,cwd:String?=null,offset:Long=1,limit:Int=2000,on:String?=null):FileChunk =
+        readChunk(path,cwd,offset,limit,on)
     suspend fun list(all: Boolean = false): List<Terminal> =
         HcJson.decodeFromJsonElement(call("terminal.list", buildJsonObject { put("all", all) }).jsonObject["terminals"]!!)
     suspend fun get(id: String): Terminal = HcJson.decodeFromJsonElement(call("terminal.get", terminalParams(id)))

@@ -103,4 +103,45 @@
     <string name="notifications">通知</string>
     <string name="notification_permission_help">herdr が前面にある間、承認待ち・完了・エラーへの変化を通知します。通知をタップすると端末を開きます。</string>
     <string name="notification_enable">有効化・設定</string>
+    <string name="agents">エージェント</string>
+    <string name="spaces">スペース</string>
+    <string name="workspace_demo">デモワークスペース・サンプル配置</string>
+    <string name="spaces_empty">接続先にスペースがありません。</string>
+    <string name="open_agent">エージェントを開く</string>
+    <string name="demo_label">デモ</string>
+    <string name="chat">チャット</string>
+    <string name="chat_empty">会話メッセージはまだありません。</string>
+    <string name="thinking">思考</string>
+    <string name="approval">承認が必要です</string>
+    <string name="question">質問</string>
+    <string name="expand">展開</string>
+    <string name="collapse">折りたたむ</string>
+    <string name="unverified_option">キーが検証されていない選択肢は端末のキーパッドで操作してください。</string>
+    <string name="chat_loading">会話を読み込み中…</string>
+    <string name="transcript_unavailable">会話との対応を確認できません。候補をプレビューし、このエージェントの会話か確認してください。</string>
+    <string name="confirm_transcript">会話の確認</string>
+    <string name="confirm_transcript_help">プレビューを読み、このエージェントの会話であることを確認してください。</string>
+    <string name="use_transcript">この会話を使用</string>
+    <string name="peek_read_only">Peek・読み取り専用の端末プレビュー</string>
+    <string name="changes">変更</string>
+    <string name="files">ファイル</string>
+    <string name="workspace_panel">ワークスペース</string>
+    <string name="refresh">更新</string>
+    <string name="no_changes">作業ツリーに変更はありません。</string>
+    <string name="no_diff">テキスト差分はありません。未追跡・バイナリのファイルには差分がない場合があります。</string>
+    <string name="open_file">ファイルを開く</string>
+    <string name="worktree">作業ツリー</string>
+    <string name="staged">ステージ済み</string>
+    <string name="diff_truncated">差分が省略されています。取得できた部分を表示しています。</string>
+    <string name="file_read_only">読み取り専用プレビュー</string>
+    <string name="load_more">続きを読み込む</string>
+    <string name="files_empty">このフォルダーは空です。</string>
+    <string name="file_preview_limit">プレビューの上限に達しました。</string>
+    <string name="find_conversations">会話の候補を探す</string>
+    <string name="binary_file">バイナリファイルはテキスト表示できません。</string>
+    <string name="file_not_found">このファイルまたはフォルダーは削除されています。</string>
+    <string name="file_error_kind">ワークスペースを読み込めませんでした（%1$s）。</string>
+    <string name="workspace_error_kind">ワークスペースの配置を読み込めませんでした（%1$s）。</string>
+    <plurals name="space_tabs"><item quantity="one">%d タブ</item><item quantity="other">%d タブ</item></plurals>
+    <plurals name="space_panes"><item quantity="one">%d ペイン</item><item quantity="other">%d ペイン</item></plurals>
 </resources>

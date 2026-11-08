@@ -29,6 +29,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     implementation(project(":terminal-view"))
     implementation(libs.compose.icons)
+    implementation(libs.markdown.m3)
     implementation(libs.lifecycle.viewmodel)
     implementation(project(":core-client"))
     implementation(platform(libs.compose.bom))

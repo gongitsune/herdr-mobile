@@ -103,3 +103,59 @@ and host-key/authentication errors, and removes exactly its own key line.
 Other keys and edits are preserved. Both tests label their terminals
 `herdr-mobile-test=1` and kill/remove only those terminals in cleanup.
 The isolated test core remains running for reuse.
+
+## Phase 4: workspaces, transcripts and repository reads
+
+The exact public signatures are in `docs/PLAN.md` under “Phase 4 公開 API”.
+
+- `workspace.WorkspaceStore(client, scope)` exposes `spaces` and `error`. It
+  preserves desktop document order, recursively flattens terminal panes, qualifies
+  remote IDs, adopts `herdr.space` / `herdr.tab`, groups unlabelled terminals by
+  startup cwd, and places unlabelled children in their parent's tab. Subscription
+  installation precedes `doc.get`; doc events, missed snapshots, new machines and
+  reconnects refetch documents. It never calls `doc.set` or changes labels.
+- `workspace.AgentDetector` unwraps recognized shell/env/interpreter/npm launch
+  forms without executing them. A shell foreground overrides stale Program Status.
+- `transcript.TranscriptSource(client, terminalId, scope)` owns its subscription
+  and polls append reads while alive; call `close()` when leaving the detail. Its
+  `items` are native `ChatItem` rows and `state` distinguishes loading, verified
+  binding, unavailable evidence and RPC failure. Parsing/projection runs away from
+  the UI thread. It never sends input or changes a transcript/label/document.
+- Session discovery requires Python 3 and readable Linux `/proc` on the remote
+  machine. It follows only processes in the terminal's HC_SCOPE, compares process
+  start identity, reads Claude's matching PID registry (or a current-process
+  explicit session launch flag), and verifies Codex's open root rollout headers.
+  Shared Codex daemons or multiple root sessions cannot be auto-bound. Only
+  whitelisted evidence leaves the host; neither full environment nor discovery
+  argv nor real transcript content is copied into tests.
+- Recent files are **candidates**, never automatic cwd/newest-file matches. The
+  UI may call `candidates()`, display `preview(candidate)`, then ask the user to
+  confirm before `select(candidate)`. A selection is local to the source and
+  invalidated by a changed process. Accepted exact bindings can remain readable
+  under an unavailable banner, while following pauses until evidence returns.
+- `file.read` offsets are one-based **line numbers**, not bytes. Following
+  rereads one checkpoint line, retries unfinished tails and resets after
+  truncation/reconnect. Claude UUID branches, parallel tool results and compact
+  boundaries are projected; Codex legacy rollback and paginated snapshots are
+  supported. A paginated revert's explicit history base is loaded only after its
+  byte boundary and final ordinal match. Missing earlier segments are marked,
+  never silently presented as complete history.
+- Display memory is bounded at 32 MiB / 100,000 current-file lines. Core additionally
+  limits text files to 64 MiB and RPC reads to 8 MiB. Oversized content reports a
+  failure/partial history rather than claiming completeness. Compressed `.zst`
+  rollouts are not automatically bound. Unknown future JSON records are ignored;
+  complete malformed lines are skipped, but incomplete final lines are retried.
+- Questions/approval cards are displayed only while Blocked. An option with empty
+  `keys` has no verified automatic key mapping: use the manual keypad. Do not infer
+  an approval action from old transcript text. The source performs no sending;
+  Composer continues to use `terminal.send` / `terminal.keys` per PLAN.
+- `HcClient.changes(cwd, on)`, `listFiles(cwd, path, on)` and
+  `readFile(path, cwd, offset, limit, on)` are read-only. Git reads disable optional
+  locks, fsmonitor, external diff and textconv; porcelain v2 is NUL-parsed, including
+  renames and names containing spaces/newlines. Directory listings include dotfiles
+  (except `.git`), directory/symlink flags, and stop at 10,000 entries.
+
+Phase 4 integration tests use only `herdr-mobile-it`, label their own terminals,
+create synthetic agent process evidence/JSONL and a throwaway git index under
+`/tmp`, and clean up those terminals/files. They never commit, write the desktop
+layout document, or copy the user's actual `~/.claude` / `~/.codex` logs.

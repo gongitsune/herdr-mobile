@@ -1,0 +1,12 @@
+herdr-app visual reference and atom-one-dark palette
+https://github.com/herdrdev/herdr-app
+Reference files: defaults/themes/atom-one-dark.json, defaults/layouts/main.json,
+defaults/mods/{agents,spaces,tabs,changes,files,peek,prompt,workspace-status}/main.js.
+Apache License 2.0. The light palette is a mobile adaptation.
+See third_party/termux-terminal/LICENSE for the Apache License 2.0 text.
+
+Compose Markdown: multiplatform-markdown-renderer 0.33.0 (Material 3 module)
+https://github.com/mikepenz/multiplatform-markdown-renderer
+Copyright Mike Penz, 2023. Apache License 2.0.
+Includes JetBrains Markdown parser (Apache License 2.0).
+No image-loader, network or syntax-highlighter extensions are enabled.

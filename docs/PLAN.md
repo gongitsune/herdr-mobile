@@ -223,6 +223,95 @@ staleTerminals は明示 close 後も新 snapshot まで保持される。app �
 
 公開 API は codex-a が先に PLAN.md に追記してから実装する。codex-b はそれまで Fake で進める。
 
+### Phase 4 公開 API（codex-a / 確定）
+
+4a は読み取り専用。document の名前・順序・pane 配置を優先し、ラベルだけの space/tab、cwd 派生 Space、子 Pane を補完する。
+ID は machine ごとに修飾される。document の未知フィールドは無視する。doc.set は呼ばない。
+
+```kotlin
+package io.herdrmobile.core.workspace
+
+enum class AgentKind { CLAUDE_CODE, CODEX, PI, OH_MY_PI, OPENCODE, GEMINI, COPILOT, CURSOR, AMP, GROK, OTHER }
+data class AgentInfo(val kind: AgentKind, val program: String, val argv: List<String>, val pid: Int? = null)
+object AgentDetector {
+    fun detect(terminal: Terminal): AgentInfo?
+    fun unwrap(argv: List<String>): List<String>
+}
+data class Pane(val id: String, val terminal: Terminal, val agent: AgentInfo? = null)
+data class Tab(val id: String, val name: String, val panes: List<Pane>)
+data class Space(val id: String, val name: String, val cwd: String, val tabs: List<Tab>,
+                 val machine: String? = null, val derived: Boolean = false)
+class WorkspaceStore(client: HcClient, scope: CoroutineScope) : java.io.Closeable {
+    val spaces: StateFlow<List<Space>>
+    val error: StateFlow<HcError?>
+    suspend fun refresh()
+    override fun close()
+}
+```
+
+4b は Source の存続中だけ追記をポーリング（既定 1500ms）。binding の再評価は初回、端末の foreground/status/turn/labels の変化、再接続、明示 refresh に行う。
+ADR 0034 に従い **cwd／最新ファイルだけでは自動 bind しない**。Claude registry の pid＋process start、Codex が開く唯一の root rollout 等の証拠を優先。
+確定できないときは Unavailable と候補一覧を提示し、ユーザーが読んで確認した候補だけ select() で採用する（端末プロセスが替われば解除）。
+file.read は **1 始まりの行 offset**。未完の末尾行は再読し、切詰め・再接続・ファイル変更時は必要に応じて投影を再構築する。
+秘密を含む全環境や argv 全体を machine.exec で持ち出さず、指定した証拠のフィールドだけを返す。
+
+```kotlin
+package io.herdrmobile.core.transcript
+
+enum class ToolState { RUNNING, SUCCEEDED, FAILED }
+data class ChatOption(val label: String, val description: String? = null, val keys: List<String> = emptyList())
+sealed interface ChatItem {
+    val id: String
+    data class UserMessage(override val id: String, val text: String) : ChatItem
+    data class AssistantText(override val id: String, val markdown: String) : ChatItem
+    data class Thinking(override val id: String, val text: String) : ChatItem
+    data class ToolCall(override val id: String, val name: String, val inputSummary: String,
+                        val result: String? = null, val state: ToolState = ToolState.RUNNING) : ChatItem
+    data class Question(override val id: String, val prompt: String, val options: List<ChatOption>,
+                        val approval: Boolean = false) : ChatItem
+    data class TurnMarker(override val id: String, val label: String) : ChatItem
+}
+data class TranscriptBinding(val kind: AgentKind, val sessionId: String, val path: String,
+                             val processKey: String, val machine: String? = null, val confirmed: Boolean = false)
+data class TranscriptCandidate(val kind: AgentKind, val sessionId: String, val path: String,
+                               val processKey: String, val machine: String? = null)
+sealed interface TranscriptState {
+    data object Loading : TranscriptState
+    data class Ready(val binding: TranscriptBinding, val complete: Boolean) : TranscriptState
+    data class Unavailable(val reason: String, val candidates: List<TranscriptCandidate> = emptyList()) : TranscriptState
+    data class Failed(val error: HcError) : TranscriptState
+}
+class TranscriptSource(client: HcClient, terminalId: String, scope: CoroutineScope,
+                       pollIntervalMs: Long = 1500) : java.io.Closeable {
+    val state: StateFlow<TranscriptState>
+    val items: StateFlow<List<ChatItem>>
+    suspend fun refresh()
+    suspend fun candidates(): List<TranscriptCandidate>
+    suspend fun preview(candidate: TranscriptCandidate): List<ChatItem>
+    suspend fun select(candidate: TranscriptCandidate) // preview 後のユーザーによる確認が前提
+    override fun close()
+}
+```
+
+Question は blocked 中のみ表示候補とする。keys が空の選択肢は未検証のため自動入力しない（手動キーパッドを使う）。
+Source は送信しない。Composer は PLAN の terminal.send / terminal.keys を使う。
+
+4c も読み取り専用。package io.herdrmobile.core.files の戻り値を用いる。
+
+```kotlin
+data class FileChunk(val text: String, val first: Long, val last: Long, val lines: Long)
+data class FileEntry(val name: String, val path: String, val directory: Boolean, val symlink: Boolean = false)
+data class ChangeEntry(val path: String, val oldPath: String? = null, val indexStatus: String,
+                       val worktreeStatus: String, val untracked: Boolean = false)
+data class ChangeSet(val cwd: String, val entries: List<ChangeEntry>, val diff: String,
+                     val stagedDiff: String, val truncated: Boolean = false)
+// HcClient のメンバー:
+suspend fun changes(cwd: String, on: String? = null): ChangeSet
+suspend fun listFiles(cwd: String, path: String = ".", on: String? = null): List<FileEntry>
+suspend fun readFile(path: String, cwd: String? = null, offset: Long = 1,
+                     limit: Int = 2000, on: String? = null): FileChunk
+```
+
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。
 - codex-b: それ以外すべて（ルート Gradle 設定、`gradle/libs.versions.toml`、`app/**`、`third_party/**`）。

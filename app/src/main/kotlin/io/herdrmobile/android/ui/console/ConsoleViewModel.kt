@@ -9,7 +9,8 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class ConsoleViewModel(private val connections: HostConnections) : ViewModel() {
-    val terminals = connections.terminals
+    val terminals = connections.terminals.map { rows -> rows.filter { io.herdrmobile.core.workspace.AgentDetector.detect(it.terminal) != null } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val hosts = connections.statuses
     val filter = MutableStateFlow<String?>(null)
     val error = MutableStateFlow(false)

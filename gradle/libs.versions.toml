@@ -18,3 +18,4 @@ datastore-preferences = { module = "androidx.datastore:datastore-preferences", v
 lifecycle-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version = "2.9.0" }
 compose-icons = { module = "androidx.compose.material:material-icons-extended" }
 lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version = "2.9.0" }
+markdown-m3 = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version = "0.33.0" }

@@ -1,0 +1,11 @@
+{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"fixture-session","message":{"content":"Synthetic request"}}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"fixture-session","apiBlockIndex":0,"message":{"id":"m1","content":[{"type":"tool_use","id":"call1","name":"Bash","input":{"command":"echo fixture"}}]}}
+{"type":"user","uuid":"r1","parentUuid":"a1","sessionId":"fixture-session","message":{"content":[{"type":"tool_result","tool_use_id":"call1","content":"fixture result"}]}}
+{"type":"assistant","uuid":"a2","parentUuid":"r1","sessionId":"fixture-session","apiBlockIndex":0,"message":{"id":"m2","content":[{"type":"thinking","thinking":"Synthetic reasoning"}]}}
+{"type":"assistant","uuid":"a3","parentUuid":"a2","sessionId":"fixture-session","apiBlockIndex":1,"message":{"id":"m2","content":[{"type":"text","text":"Synthetic answer"}]}}
+{"type":"system","uuid":"end","parentUuid":"a3","sessionId":"fixture-session","subtype":"turn_duration"}
+{"type":"user","uuid":"abandoned","parentUuid":"end","sessionId":"fixture-session","message":{"content":"Abandoned branch"}}
+{"type":"assistant","uuid":"abandoned-answer","parentUuid":"abandoned","sessionId":"fixture-session","message":{"id":"old","content":[{"type":"text","text":"Must not appear"}]}}
+not valid json sealed after a crash
+{"type":"user","uuid":"new","parentUuid":"end","sessionId":"fixture-session","message":{"content":"Current branch"}}
+{"type":"assistant","uuid":"side","parentUuid":null,"sessionId":"fixture-session","isSidechain":true,"agentId":"fixture-child","message":{"id":"side","content":[{"type":"text","text":"Private sidechain not shown"}]}}

@@ -46,6 +46,7 @@ class RemoteTerminalSession(
 
     init {
         terminal.updateSize(columns, rows, 8, 16)
+        terminal.emulator.mColors.reset()
         view.setTerminalViewClient(callbacks)
         view.setTextSize(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 14f, view.resources.displayMetrics).toInt())
         view.attachSession(terminal)
