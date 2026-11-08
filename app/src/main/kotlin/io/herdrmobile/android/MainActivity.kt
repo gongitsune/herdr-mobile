@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,7 +34,13 @@ class MainActivity : ComponentActivity() {
     }
     fun enableNotifications() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            val preferences = getSharedPreferences("notification-permission", MODE_PRIVATE)
+            if (preferences.getBoolean("asked", false) && !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+                startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+            } else {
+                preferences.edit().putBoolean("asked", true).apply()
+                requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
     }
 }

@@ -187,6 +187,42 @@ staleTerminals は明示 close 後も新 snapshot まで保持される。app �
   - keystore はリポジトリに入れない。ローカルの正本は `~/.config/herdr-mobile/debug.keystore`。
 - versionCode は CI で `GITHUB_RUN_NUMBER` を使う（無ければ 1）。
 
+## Phase 4: herdr-app 風 UI ＋ ターミナル ⇔ チャット切替
+
+ユーザー決定（2026-11-08）: アプリ全体を herdr-app の構成に合わせてモバイル向けにする。さらに各エージェントで「ターミナル ⇔ チャット」を切り替えられるようにする。チャットのデータ源は **エージェント自身が書き出す会話ログ**（ACP は使わない）。
+
+参考資料（scratchpad の `ref/` にクローン済み、どちらも Apache-2.0）:
+- `ref/herdr-app`: `README.md`, `defaults/mods/{agents,spaces,tabs,changes,files,peek,prompt,workspace-status}/main.js`, `defaults/themes/atom-one-dark.json`, `defaults/layouts/main.json`, `docs/labels.md`, `src/layout_sync.rs`
+- `ref/Heeler/docs/adr/0024`（会話ログからのチャット）, `0032`（herdr-core を herdr-app の構成で見せる）, `0034`（チャットとセッションの対応付け）, `0035`（送信を attach 経由で行う）, `docs/research/claude-code-transcript-format.md`, `codex-rollout-format.md`
+
+### 構成モデル（読み取り専用）
+- Space / Tab / Pane は、core の document `herdr-app`（`doc.get`、`doc` イベントで読み直す）と端末ラベル `herdr.*` から組み立てる。`docs/labels.md` の規約に従う。
+- **`herdr-app` document には絶対に書き込まない**（デスクトップの配置が壊れる。Heeler ADR 0032）。新しい端末を Space に入れるときは、herdr-app の規約どおりのラベルを付けて取り込ませる。
+- ラベルの無い端末は cwd ごとの「派生 Space」に入れる。別の端末の子（サブエージェント）は親と同じ Tab の Pane にする。
+- Agent 判定: foreground プログラムを unwrap して（`sh -c`、`npx`、herdr-app のラッパー）、claude / codex などの既知エージェントか、Program Status を報告しているかで決める。
+
+### チャット（会話ログ）
+- 対応は Claude Code と Codex（最初はこの2つだけ）。ログは `file.read`（offset/limit で追記分だけ読む）と `machine.exec`（ファイルの場所を探す）で取得する。追加の SFTP は使わない。
+- 端末とセッションの対応付けは Heeler ADR 0034 に従う（foreground の argv や cwd、セッション ID を指定する起動フラグ、最新ファイルなど）。
+- 共通モデル `ChatItem`: UserMessage, AssistantText(markdown), Thinking(折りたたみ), ToolCall(name, 入力の要約, 結果, 状態), Question/Approval（Blocked のときの選択肢）, TurnMarker。
+- 送信は Composer → `terminal.send`。Blocked のときの選択肢ボタンは `terminal.keys`。チャットとターミナルで Composer を共有する。
+
+### 画面（モバイル化した herdr-app）
+- 下部ナビゲーション: **Agents**（今の Console。Blocked / Working / Done / Idle でグループ化）, **Spaces**, **Hosts**。
+- Spaces: Space 一覧（ホストごと）→ Space 詳細（上部に横スクロールのタブ列、Pane が複数あれば縦に並べるかスワイプで切り替え）。Space 詳細のボトムシートに **Changes**（`git status --porcelain=v2` と diff）と **Files**（ツリーと読み取り専用の表示）。
+- エージェント詳細: 上部のセグメントで **Terminal ⇔ Chat** を切り替え（既定はチャット。会話ログが無いエージェントはターミナル）。切り替えても attach は維持し、表示だけを替える。
+- Peek: Agents 一覧で長押しすると、observe で attach した小さなプレビューをボトムシートで出す。
+- テーマ: herdr-app の atom-one-dark とステータスの色に合わせる（ライト/ダークの両方）。端末の ANSI 16色も同じテーマにする。
+
+### 担当
+| | codex-a (`core-client/**`) | codex-b（それ以外） |
+|---|---|---|
+| 4a | `workspace/`: herdr-app document とラベルから Space/Tab/Pane を組み立てる `WorkspaceStore`、Agent 判定 | ナビゲーションの再構成（Agents / Spaces / Hosts）、テーマ、Space 一覧と詳細（Fake データでよい） |
+| 4b | `transcript/`: `TranscriptSource`（file.read で追記分を読む）, Claude Code / Codex のアダプタ → `ChatItem`、セッションの対応付け。フィクスチャを使った単体テスト | チャット画面（Markdown、ツール呼び出しのカード、思考の折りたたみ、Approval のボタン）、Terminal ⇔ Chat の切り替え、Peek |
+| 4c | `HcClient` に `changes(cwd)` / `listFiles(cwd, path)` / `readFile` のヘルパー | Changes / Files のボトムシート、仕上げ |
+
+公開 API は codex-a が先に PLAN.md に追記してから実装する。codex-b はそれまで Fake で進める。
+
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。
 - codex-b: それ以外すべて（ルート Gradle 設定、`gradle/libs.versions.toml`、`app/**`、`third_party/**`）。

@@ -76,6 +76,9 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
     }
     private fun stopStream() { generation++; remote?.dispose(); remote = null; ready.value = false }
     fun unbind() { watch?.cancel(); watch = null; stopStream(); recovering.value = false }
+    fun retryConnection() {
+        if (connections.statuses.value.find { it.host.id == hostId }?.state !is ConnectionState.Connected) connections.reconnect(hostId)
+    }
     fun keyCode(code: Int) { if (ready.value && !observe.value) remote?.keyCode(code, control.value) }
     fun key(value: String) { if (ready.value && !observe.value) remote?.write(value) }
     fun send() {

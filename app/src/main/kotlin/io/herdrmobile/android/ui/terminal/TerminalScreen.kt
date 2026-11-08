@@ -56,7 +56,7 @@ fun TerminalScreen(vm: TerminalViewModel, back: () -> Unit) {
         }
         if (error != null || ended || recovering) Row(Modifier.padding(horizontal = 16.dp)) {
             Text(error?.let { terminalErrorMessage(it) } ?: stringResource(if (recovering) R.string.terminal_recovering else R.string.attach_closed), Modifier.weight(1f))
-            TextButton(onClick = { retry++ }) { Text(stringResource(R.string.retry)) }
+            TextButton(onClick = { vm.retryConnection(); retry++ }) { Text(stringResource(R.string.retry)) }
         }
         key(observe, retry) {
             AndroidView(factory = { context -> TerminalView(context, null).also { view = it } }, modifier = Modifier.fillMaxWidth().weight(1f))

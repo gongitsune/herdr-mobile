@@ -60,7 +60,7 @@ jobs:
           done
           exit 1
       - name: Test, assemble and lint
-        run: ./gradlew :core-client:test :app:assembleDebug :app:lintDebug
+        run: ./gradlew :core-client:test :app:assembleDebug :app:lintDebug :app:testDebugUnitTest :terminal-emulator:testDebugUnitTest
       - name: Name APK
         id: apk
         shell: bash
@@ -100,6 +100,10 @@ jobs:
         run: |
           if gh release view nightly > /dev/null 2>&1; then
             gh release delete nightly --yes --cleanup-tag
+          fi
+          # An interrupted or manually deleted release can leave an orphan tag.
+          if gh api "repos/$GH_REPO/git/ref/tags/nightly" > /dev/null 2>&1; then
+            gh api --method DELETE "repos/$GH_REPO/git/refs/tags/nightly"
           fi
           gh release create nightly apk/*.apk \
             --target "$GITHUB_SHA" \
