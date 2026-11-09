@@ -5,6 +5,7 @@ import io.herdrmobile.core.files.*
 import io.herdrmobile.core.model.*
 import io.herdrmobile.core.rpc.HcError
 import io.herdrmobile.core.workspace.AgentKind
+import io.herdrmobile.core.workspace.AgentDetector
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.channels.Channel
@@ -93,10 +94,12 @@ class TranscriptSource(
     }
     suspend fun refresh() { update(rebind=true) }
     private suspend fun update(rebind:Boolean) = withContext(Dispatchers.Default) { lock.withLock {
-        if(!owned.isActive || (!rebind && !canFollow)) return@withLock
+        if(!owned.isActive) return@withLock
         val terminal=store.terminals.value.find { it.id==terminalId } ?: return@withLock
+        val codex=AgentDetector.detect(terminal)?.kind==AgentKind.CODEX
+        if(!rebind && !canFollow && !codex) return@withLock
         try {
-            if(rebind) {
+            if(rebind || codex) {
                 val evidence=resolver.resolve(terminal)
                 val chosen=selected?.takeIf { it.processKey==evidence.processKey }
                 if(selected!=null && chosen==null) { selected=null; previewed.clear(); mutableItems.value=emptyList() }
@@ -106,8 +109,8 @@ class TranscriptSource(
                     mutableSession.value=null
                     projectedRevision=-1
                     mutableActivity.value=null.withTerminal(terminal)
-                    mutableState.value=TranscriptState.Unavailable(evidence.reason)
-                    if(binding?.confirmed==true) { binding=null; mutableItems.value=emptyList() }
+                    mutableState.value=TranscriptState.Unavailable(evidence.reason,evidence.candidates)
+                    if(codex || binding?.confirmed==true) { binding=null; mutableItems.value=emptyList() }
                     return@withLock
                 }
                 if(evidence.binding!=null && chosen!=null && evidence.binding.path!=chosen.path) selected=null

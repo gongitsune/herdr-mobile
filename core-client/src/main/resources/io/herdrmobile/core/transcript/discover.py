@@ -2,6 +2,7 @@
 # transcript messages and account metadata. No files or labels are modified.
 import os, sys, json, re, glob, collections
 kind, foreground, terminal, cwd, mode = sys.argv[1:6]
+title = sys.argv[6] if len(sys.argv) > 6 else ""
 foreground, terminal = int(foreground), int(terminal)
 MAX_PROCESSES = 4096
 
@@ -86,6 +87,7 @@ def main():
         report(process_key=process_key, reason='Agent HOME is unavailable'); return
     root = env.get('CLAUDE_CONFIG_DIR' if kind == 'CLAUDE_CODE' else 'CODEX_HOME') or os.path.join(home, '.claude' if kind == 'CLAUDE_CODE' else '.codex')
     candidates, exact, open_files, lock_ids = [], None, [], []
+    stored, process_started_ms = [], None
     if kind == 'CLAUDE_CODE':
         if env.get('CLAUDE_CODE_SKIP_PROMPT_HISTORY') not in (None, '', '0'):
             report(process_key=process_key, reason='Claude transcript recording is disabled'); return
@@ -156,7 +158,13 @@ def main():
             report(process_key=process_key, reason='Cannot inspect agent open files'); return
         if len(open_files) > 8:
             report(process_key=process_key, reason='More than eight open rollouts; refusing ambiguous binding'); return
-        if mode == 'candidates':
+        try:
+            stored = codex_candidates(root, cwd, title)
+            boot = next(int(line.split()[1]) for line in read('/proc/stat').decode().splitlines() if line.startswith('btime '))
+            process_started_ms = boot * 1000 + int(start) * 1000 // os.sysconf('SC_CLK_TCK') + 1000
+        except (OSError, ValueError, sqlite3.Error):
+            pass
+        if mode == 'candidates' and not glob.glob(os.path.join(root, 'state_*.sqlite')):
             paths = []
             for parent in ('sessions', 'archived_sessions'):
                 for directory, dirs, files in os.walk(os.path.join(root, parent)):
@@ -176,7 +184,7 @@ def main():
     if stat(pid)[1] != start or stat(terminal)[1] != root_start:
         report(reason='Agent process changed during evidence read'); return
     report(process_key=process_key, binding=exact, open_files=sorted(set(open_files)), lock_ids=lock_ids,
-           candidates=candidates, reason='No unique exact session evidence')
+           candidates=candidates, stored=stored, process_started_ms=process_started_ms, reason='No unique exact session evidence')
 
 try:
     main()

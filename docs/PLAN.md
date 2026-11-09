@@ -748,6 +748,32 @@ class ClaudeAccountStore(client: HcClient, scope: CoroutineScope) : java.io.Clos
 2. モデルのシートの見出しの下に 1 行「新しいセッションの既定にもなります（Claude Code の仕様）」。
 3. TurnMarker が local-command-stdout 由来の行（例「Set model to Sonnet 5.5 …」）を薄い 1 行で出すのを確認。
 
+## Phase 9b: Codex 0.157 以降でもチャットを出す（ユーザー指摘 2026-11-09）
+
+### 原因（Claude 確認、codex-cli 0.167.0）
+- 「Codex ではチャット画面が機能しない」。`discover.py` は Codex の証拠として **TUI が開いている `rollout-*.jsonl` の fd** と thread の `.lock` を見るが、
+  Codex 0.157 以降は全 TUI が共有の **app-server デーモン**（`$CODEX_HOME/app-server-control/`）を使い、rollout を開くのはデーモン。TUI プロセスには rollout の fd も lock も無い
+  → 常に「No conversation log found」。`logs_2.sqlite` の TUI 行にも thread_id は無い。
+- 参考：Ovis `server/codex.ts`（`freshReportedThread`、`matchCodexTranscript`、state_5 の threads 読み）。考え方だけ取り入れる。
+
+### 方針（codex-a、core-client のみ。app の変更は不要の見込み）
+従来の open-fd 証拠はそのまま残し、それで決まらないときだけ次を使う。どれも読み取り専用。
+1. **候補**：`$CODEX_HOME/state_5.sqlite`（`state_*.sqlite` の最大番号。`file:…?mode=ro` で開く、無ければこの経路は使わない）の `threads` から、
+   `cwd` = 端末の foreground cwd（realpath で比較）、`archived = 0`、`agent_role IS NULL`、`thread_source` が null か `user`、`source` が対話（`cli` / `vscode`、列が無ければ不問）、
+   `updated_at` の新しい順に 32 件。rollout_path は `$CODEX_HOME/sessions` 配下の実在ファイルだけ。rollout 1 行目の session_meta が子スレッド（`parent_thread_id` / `agent_role` / `thread_source != "user"`）なら除く。
+2. **画面照合（最優先、Ovis の `matchCodexTranscript` に倣う）**：`HcClient.read(terminalId)` の画面テキストのうち、最後の `OpenAI Codex (v` 見出しより後だけを使う（`/new` や再起動より前の表示を混ぜない）。
+   - **長い回答の一致**：候補 rollout 末尾（最大 1 MiB）の assistant の回答（`agent_message` / `response_item` の assistant 出力テキスト）のうち、正規化（NFKC、空白を 1 つ、記号の揺れを無視）して **64 文字以上かつ異なる文字 12 種以上** のものが画面にまるごと出ていて、**他の候補の回答には同じ文が無い** 候補がちょうど 1 つ → exact。
+   - **最後のターンの一致（短い回答用）**：画面の最後の「`› <プロンプト>` → `• <回答>` → `Worked for …`」の組（Codex のフッター付きで終わった最新のターン）と、候補の **最後に完了したターンのプロンプトと回答** が一致する候補がちょうど 1 つ、かつ他の候補の最新ターンが同じプロンプトでない → exact。`ok` のような短い回答はこれでだけ決める。
+   - 一致が複数・0 なら次へ。照合は Kotlin 側。スクリプトは候補の id/path だけ返し、本文は既存の file.read で読む。
+   - 端末タイトルに thread id（またはその先頭）が出ていれば、それも候補に加える（タイトルだけでは決めない。照合の候補にするだけ）。
+3. **新しいスレッド**：TUI プロセスの起動時刻以降に作られた（`created_at_ms`、無ければ `created_at*1000`）候補がちょうど 1 つで、その後にこの cwd で新しいスレッドが始まっておらず、
+   **そのスレッドの作成時に同じ machine で他の Codex 端末（terminals 一覧で AgentDetector が CODEX、別の端末 ID）が動いていなかった** なら exact。
+4. 決まった binding は processKey が同じ間は保持。ただしこの cwd でそれより新しい対話スレッドが現れたら（`/new`）再評価する。
+5. 決まらなければ従来どおり Unavailable と候補（1 の一覧）を出す（ユーザーが選べる）。
+- ADR 0034 の「cwd／最新ファイルだけでは自動 bind しない」は守る：2 は画面の内容、3 はプロセス起動時刻と他端末の不在という追加の証拠があるときだけ。
+- テスト：state_5 のフィクスチャ（一時 sqlite）で 1〜4、子スレッド除外、他の Codex 端末があるときは 3 で決めないこと、画面照合の曖昧さ。結合テスト（`herdr-mobile-it`）は実 Codex が無ければ skip。
+- 実例：`HC_SESSION=herdr-mobile-it` の `t23`（名前 `p9codex`、cwd は Claude の scratchpad/p9）が実際の Codex 0.167 で 1 往復済み。rollout は `~/.codex/sessions/2026/11/09/rollout-2026-11-09T18-16-10-01a1bf97-…jsonl`。default セッションの端末には触らない。
+
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。
 - codex-b: それ以外すべて（ルート Gradle 設定、`gradle/libs.versions.toml`、`app/**`、`third_party/**`）。
