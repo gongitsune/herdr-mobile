@@ -209,6 +209,7 @@ class HcClient internal constructor(
 
     suspend fun call(method: String, params: JsonObject): JsonElement =
         (connection ?: throw HcError("io", "Not connected")).call(method, params)
+    suspend fun gitBranch(cwd:String,on:String?=null):String? = readGitBranch(this,cwd,on)
     suspend fun changes(cwd:String,on:String?=null):ChangeSet = readChanges(this,cwd,on)
     suspend fun listFiles(cwd:String,path:String=".",on:String?=null):List<FileEntry> = readDirectory(this,cwd,path,on)
     suspend fun readFile(path:String,cwd:String?=null,offset:Long=1,limit:Int=2000,on:String?=null):FileChunk =

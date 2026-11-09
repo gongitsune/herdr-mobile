@@ -11,6 +11,28 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
 class WorkspaceTest {
+    @Test fun unnamedTabsUseFinalPositionWithinEachSpace() {
+        val document=HcJson.parseToJsonElement("""{"spaces":[{"id":"s","tabs":[{"id":"empty","name":""},{"id":"named","name":"Primary"},{"id":"missing"},{"id":"blank","name":" "}]},{"id":"other","tabs":[{"id":"first"}]}]}""")
+        val terminals=listOf(
+            Terminal(address="later",state="live",created_ms=2,name="Terminal name",title="Terminal title",
+                labels=mapOf("herdr.space" to "s")),
+            Terminal(address="earlier",state="live",created_ms=1,title="Earlier title",
+                labels=mapOf("herdr.space" to "s","herdr.tab" to "adopted")),
+            Terminal(address="shared",state="live",created_ms=3,
+                labels=mapOf("herdr.space" to "s","herdr.tab" to "adopted")),
+            Terminal(address="existing",state="live",name="Do not rename",
+                labels=mapOf("herdr.space" to "s","herdr.tab" to "named")),
+            Terminal(address="new-space",state="live",name="Shell",
+                labels=mapOf("herdr.space" to "new")))
+        val spaces=projectWorkspace(terminals,mapOf("" to document))
+        val tabs=spaces.single { it.id=="s" }.tabs
+        assertEquals(listOf("empty","named","missing","blank","adopted","terminal:later"),tabs.map { it.id })
+        assertEquals(listOf("1","Primary","3","4","5","6"),tabs.map { it.name })
+        assertEquals(listOf("earlier","shared"),tabs[4].panes.map { it.terminal.id })
+        assertEquals("1",spaces.single { it.id=="other" }.tabs.single().name)
+        assertEquals("1",spaces.single { it.id=="new" }.tabs.single().name)
+    }
+
     @Test fun documentOrderLabelsChildrenAndMachinesAreProjectedWithoutDerivedSpaces() {
         val terminals=listOf(
             Terminal(address="t1",cwd="/project",labels=mapOf("herdr.space" to "s","herdr.tab" to "tab")),

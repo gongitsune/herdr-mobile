@@ -8,9 +8,7 @@ import io.herdrmobile.android.ui.asHcError
 import io.herdrmobile.core.*
 import io.herdrmobile.core.model.Terminal
 import io.herdrmobile.core.transcript.*
-import io.herdrmobile.android.ui.chat.DemoConversation
 import io.herdrmobile.android.ui.chat.*
-import java.util.UUID
 import io.herdrmobile.android.ui.chat.visibleChatItems
 import io.herdrmobile.android.ui.theme.AtomPalette
 import com.termux.terminal.TerminalColors
@@ -18,41 +16,46 @@ import io.herdrmobile.core.rpc.HcError
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
-class TerminalViewModel(private val connections: HostConnections, private val hostId: String, private val id: String, initialObserve: Boolean = false) : ViewModel() {
-    val demo = hostId == "demo"
+class TerminalViewModel(private val connections: HostConnections, private val hostId: String, private val id: String) : ViewModel() {
     val connected = MutableStateFlow(false)
     val record = MutableStateFlow<Terminal?>(null)
     val activity = MutableStateFlow<TurnActivity?>(null)
-    val receipts = MutableStateFlow<List<SendReceipt>>(emptyList())
-    val questionJump = MutableStateFlow(0)
-    val observe = MutableStateFlow(initialObserve || demo)
-    val chatItems = MutableStateFlow(if (demo) DemoConversation.items else emptyList<ChatItem>())
+    val observe = MutableStateFlow(false)
+    val chatItems = MutableStateFlow(emptyList<ChatItem>())
     val transcriptState = MutableStateFlow<TranscriptState?>(null)
-    val blocked = MutableStateFlow(demo)
+    val blocked = MutableStateFlow(false)
     val selectedSurface = MutableStateFlow<DetailSurface?>(null)
     val candidate = MutableStateFlow<TranscriptCandidate?>(null)
     val candidatePreview = MutableStateFlow<List<ChatItem>?>(null)
     val candidateError = MutableStateFlow<HcError?>(null)
     val candidateBusy = MutableStateFlow(false)
-    private val previewOnly = initialObserve
     private var source: TranscriptSource? = null
     private var sourceClient: HcClient? = null
     private var sourceWatch: Job? = null
     private var previewJob: Job? = null
     val control = MutableStateFlow(false)
+    val alt = MutableStateFlow(false)
+    val shift = MutableStateFlow(false)
     val draft = MutableStateFlow("")
     val error = MutableStateFlow<HcError?>(null)
     val ended = MutableStateFlow(false)
     val recovering = MutableStateFlow(false)
     val ready = MutableStateFlow(false)
     val busy = MutableStateFlow(false)
-    val text = MutableStateFlow<String?>(null)
+    val stopCoolingDown = MutableStateFlow(false)
+    val choiceError = MutableStateFlow<ChoiceError?>(null)
+    private var cooldownJob: Job? = null
+    private fun sentRecently() {
+        stopCoolingDown.value = true
+        cooldownJob?.cancel()
+        cooldownJob = viewModelScope.launch { delay(1000); stopCoolingDown.value = false }
+    }
+    fun consumeModifiers() { control.value = false; alt.value = false; shift.value = false }
     private var generation = 0
     private var remote: RemoteTerminalSession? = null
     private var watch: Job? = null
 
     fun bind(view: TerminalView) {
-        if (demo) return
         unbind(); error.value = null; ended.value = false
         watch = viewModelScope.launch {
             var previous: Terminal? = null
@@ -63,7 +66,6 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
             }.collect { (state, row) ->
                 connected.value = state is ConnectionState.Connected && row != null && !row.stale
                 record.value = row?.terminal
-                if (view is TailTerminalView) row?.terminal?.let { view.remoteSize(it.cols, it.rows) }
                 blocked.value = row?.terminal?.status?.state == "blocked" && !row.stale
                 val client = connections.client(hostId)
                 if (state !is ConnectionState.Connected || client == null) {
@@ -73,7 +75,7 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
                         ?: if (state == null) HcError("not_found", "Host removed") else null
                     return@collect
                 }
-                if (!previewOnly && sourceClient !== client) followTranscript(client)
+                if (sourceClient !== client) followTranscript(client)
                 val recoveredConnection = !wasConnected || client !== previousClient
                 wasConnected = true; previousClient = client
                 if (recoveredConnection) { stopStream(); ended.value = false; error.value = null }
@@ -98,7 +100,7 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
     private fun startStream(view: TerminalView, client: HcClient) {
         val token = ++generation
         recovering.value = true
-        remote = RemoteTerminalSession(view, client, id, viewModelScope, observe.value, { control.value },
+        remote = RemoteTerminalSession(view, client, id, viewModelScope, observe.value, { control.value }, { alt.value }, { shift.value }, ::consumeModifiers,
             { if (generation == token) { ready.value = it; if (it) recovering.value = false } },
             { failure -> if (generation == token) { error.value = failure; recovering.value = false } },
             { reason -> if (generation == token) {
@@ -112,7 +114,7 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
         previewJob?.cancel(); sourceWatch?.cancel(); sourceWatch = null
         source?.close(); source = null; sourceClient = null
         activity.value = null
-        if (!demo) { transcriptState.value = null; chatItems.value = emptyList() }
+        transcriptState.value = null; chatItems.value = emptyList()
         candidate.value = null; candidatePreview.value = null; candidateError.value = null
     }
     private fun followTranscript(client: HcClient) {
@@ -124,11 +126,9 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
             combine(transcript.state, transcript.items, transcript.activity) { state, items, activity -> Triple(state, items, activity) }.collect { (state, items, turnActivity) ->
                 transcriptState.value = state; chatItems.value = visibleChatItems(state, items)
                 activity.value = turnActivity
-                receipts.value = confirmReceipts(receipts.value, items, (state as? TranscriptState.Ready)?.binding?.processKey, (state as? TranscriptState.Ready)?.binding?.path)
             }
         }
     }
-    fun refreshTranscript() { viewModelScope.launch { try { source?.refresh() } catch (e: CancellationException) { throw e } catch (e: Exception) { error.value = e.asHcError() } } }
     fun findCandidates() { viewModelScope.launch { try { source?.candidates() } catch (e: CancellationException) { throw e } catch (e: Exception) { error.value = e.asHcError() } } }
     fun previewCandidate(value: TranscriptCandidate) {
         previewJob?.cancel(); candidate.value = value; candidatePreview.value = null; candidateError.value = null
@@ -152,9 +152,10 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
             finally { candidateBusy.value = false }
         }
     }
-    fun choose(question: ChatItem.Question, option: ChatOption) {
-        if (demo || !canChooseOption(chatItems.value, question, option, blocked.value, ready.value && !observe.value, transcriptState.value is TranscriptState.Ready)) return
-        action { checkNotNull(connections.client(hostId)).keys(id, option.keys); source?.nudge() }
+    fun choose(question: ChatItem.Question, option: ChatOption) = submitChoice(question, option) {}
+    private fun submitChoice(question: ChatItem.Question, option: ChatOption, sent: () -> Unit) {
+        if (!canChooseOption(chatItems.value, question, option, blocked.value, ready.value && !observe.value, transcriptState.value is TranscriptState.Ready)) return
+        action { try { checkNotNull(connections.client(hostId)).keys(id, option.keys); source?.nudge(); sent() } finally { sentRecently() } }
     }
     fun applyPalette(dark: Boolean) {
         TerminalColors.COLOR_SCHEME.updateWith(AtomPalette.terminalProperties(dark))
@@ -164,34 +165,40 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
     fun retryConnection() {
         if (connections.statuses.value.find { it.host.id == hostId }?.state !is ConnectionState.Connected) connections.reconnect(hostId)
     }
-    fun keyCode(code: Int) { if (ready.value && !observe.value) remote?.keyCode(code, control.value) }
-    fun key(value: String) { if (ready.value && !observe.value) remote?.write(value) }
-    fun newObservePreview() = TerminalViewModel(connections, hostId, id, initialObserve = true)
-    fun jumpToQuestion() { selectedSurface.value = DetailSurface.CHAT; questionJump.value++ }
+    fun keyCode(code: Int) { if (ready.value && !observe.value) { remote?.keyCode(code, control.value, alt.value, shift.value); consumeModifiers() } }
+    fun key(value: String) { if (ready.value && !observe.value) { remote?.write(value); consumeModifiers() } }
     fun send() {
         if (observe.value || !ready.value || busy.value || draft.value.isBlank()) return
         val value = draft.value
-        val state = transcriptState.value as? TranscriptState.Ready
-        val receipt = SendReceipt(UUID.randomUUID().toString(), value, System.currentTimeMillis(),
-            chatItems.value.filterIsInstance<ChatItem.UserMessage>().map { it.id }.toSet(), state?.binding?.processKey, state?.complete == true, bindingPath = state?.binding?.path)
-        receipts.value = (receipts.value + receipt).takeLast(50)
+        val question = activeQuestion(chatItems.value, blocked.value)
+        if (question != null) {
+            val option = numberedOption(question, value)
+            if (option == null) { choiceError.value = ChoiceError.INVALID_NUMBER; return }
+            if (option.keys.isEmpty()) { choiceError.value = ChoiceError.MANUAL; return }
+            choiceError.value = null
+            if (canChooseOption(chatItems.value, question, option, blocked.value, ready.value && !observe.value, transcriptState.value is TranscriptState.Ready)) {
+                submitChoice(question, option) { if (draft.value == value) draft.value = "" }
+            }
+            return
+        }
         viewModelScope.launch {
             busy.value = true; error.value = null
             try {
                 checkNotNull(connections.client(hostId)).send(id, value)
-                receipts.value = receipts.value.map { if (it.id == receipt.id) it.copy(delivery = Delivery.SENT) else it }
                 if (draft.value == value) draft.value = ""
                 source?.nudge()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                receipts.value = receipts.value.map { if (it.id == receipt.id) it.copy(delivery = Delivery.UNDELIVERED) else it }
                 error.value = e.asHcError(); source?.nudge()
-            } finally { busy.value = false }
+            } finally { sentRecently(); busy.value = false }
         }
+    }
+    fun stopWorking() {
+        if (!canStopWorking(connected.value && (record.value?.status?.state == "working" || activity.value?.running == true), blocked.value, activeQuestion(chatItems.value, blocked.value), stopCoolingDown.value)) return
+        interrupt()
     }
     fun interrupt() { if (!observe.value && ready.value) action { checkNotNull(connections.client(hostId)).interrupt(id) } }
     fun kill() { if (!observe.value && ready.value) action { checkNotNull(connections.client(hostId)).kill(id) } }
-    fun read() = action { text.value = checkNotNull(connections.client(hostId)).read(id) }
     private fun action(block: suspend () -> Unit) {
         if (busy.value) return
         viewModelScope.launch {
@@ -206,3 +213,5 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
 }
 
 enum class DetailSurface { TERMINAL, CHAT }
+
+enum class ChoiceError { INVALID_NUMBER, MANUAL }

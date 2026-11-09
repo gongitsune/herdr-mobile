@@ -14,22 +14,18 @@ import io.herdrmobile.core.transcript.TranscriptState
 
 @Composable
 fun TranscriptPanel(vm: TerminalViewModel, state: TranscriptState?) {
-    if (vm.demo) Text(stringResource(R.string.workspace_demo), Modifier.padding(12.dp), style = MaterialTheme.typography.labelMedium)
-    else Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        when (state) {
-            null, TranscriptState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
-            is TranscriptState.Ready -> if (!state.complete) Text(stringResource(R.string.chat_loading), style = MaterialTheme.typography.labelSmall)
-            is TranscriptState.Failed -> Text(terminalErrorMessage(state.error), color = MaterialTheme.colorScheme.error)
-            is TranscriptState.Unavailable -> {
-                Text(stringResource(R.string.transcript_unavailable), style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = vm::findCandidates) { Text(stringResource(R.string.find_conversations)) }
-                state.candidates.forEach { candidate ->
-                    TextButton(onClick = { vm.previewCandidate(candidate) }) { Text("${candidate.sessionId} · ${candidate.path}", maxLines = 2) }
-                }
-            }
+    var candidates by remember { mutableStateOf(false) }
+    if (state is TranscriptState.Unavailable || state is TranscriptState.Failed) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(stringResource(R.string.transcript_unavailable), Modifier.weight(1f), style = MaterialTheme.typography.labelSmall)
+            TextButton(onClick = { candidates = true; vm.findCandidates() }) { Text(stringResource(R.string.find_conversations)) }
         }
-        if (state is TranscriptState.Unavailable || state is TranscriptState.Failed) TextButton(onClick = vm::refreshTranscript) { Text(stringResource(R.string.retry)) }
     }
+    if (candidates) AlertDialog(onDismissRequest = { candidates = false }, title = { Text(stringResource(R.string.find_conversations)) },
+        text = { Column { (state as? TranscriptState.Unavailable)?.candidates.orEmpty().forEach { candidate ->
+            TextButton(onClick = { candidates = false; vm.previewCandidate(candidate) }) { Text(candidate.sessionId, maxLines = 1) }
+        } } }, confirmButton = { TextButton(onClick = { candidates = false }) { Text(stringResource(R.string.close)) } })
+
 }
 
 @Composable
@@ -44,7 +40,7 @@ fun CandidatePreview(vm: TerminalViewModel) {
             Text(stringResource(R.string.confirm_transcript_help), style = MaterialTheme.typography.bodySmall)
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             error?.let { Text(terminalErrorMessage(it), color = MaterialTheme.colorScheme.error) }
-            ChatTimeline(items.orEmpty(), false, false, { _, _ -> }, Modifier.weight(1f))
+            ChatTimeline(items.orEmpty(), false, Modifier.weight(1f))
         } },
         confirmButton = { TextButton(enabled = items?.isNotEmpty() == true && !busy && error == null, onClick = vm::selectCandidate) { Text(stringResource(R.string.use_transcript)) } },
         dismissButton = { TextButton(onClick = vm::dismissCandidate) { Text(stringResource(R.string.cancel)) } }) }

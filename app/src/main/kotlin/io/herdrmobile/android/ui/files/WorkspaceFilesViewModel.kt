@@ -9,7 +9,7 @@ import io.herdrmobile.core.rpc.HcError
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
-class WorkspaceFilesViewModel(private val connections: HostConnections, private val hostId: String, val cwd: String, private val machine: String?, private val demo: Boolean) : ViewModel() {
+class WorkspaceFilesViewModel(private val connections: HostConnections, private val hostId: String, val cwd: String, private val machine: String?) : ViewModel() {
     val changes = MutableStateFlow<ChangeSet?>(null)
     val staged = MutableStateFlow(false)
     val diff = combine(changes, staged) { changes, staged -> diffRows(if (staged) changes?.stagedDiff.orEmpty() else changes?.diff.orEmpty()) }
@@ -21,6 +21,7 @@ class WorkspaceFilesViewModel(private val connections: HostConnections, private 
     val selectedFile = MutableStateFlow<FileEntry?>(null)
     val file = MutableStateFlow<FileChunk?>(null)
     val error = MutableStateFlow<HcError?>(null)
+    val changesError = MutableStateFlow<HcError?>(null)
     private val operations = MutableStateFlow(0)
     val busy = operations.map { it > 0 }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val loadingDirectories = MutableStateFlow<Set<String>>(emptySet())
@@ -30,10 +31,10 @@ class WorkspaceFilesViewModel(private val connections: HostConnections, private 
     fun refreshChanges() {
         changeJob?.cancel()
         changeJob = viewModelScope.launch {
-            operations.update { it + 1 }; error.value = null
-            try { changes.value = if (demo) FakeFiles.changes else client().changes(cwd, on = machine) }
+            operations.update { it + 1 }; changesError.value = null
+            try { changes.value = client().changes(cwd, on = machine) }
             catch (e: CancellationException) { throw e }
-            catch (e: Exception) { error.value = e.asHcError() }
+            catch (e: Exception) { changes.value = null; changesError.value = e.asHcError() }
             finally { operations.update { (it - 1).coerceAtLeast(0) } }
         }
     }
@@ -44,7 +45,7 @@ class WorkspaceFilesViewModel(private val connections: HostConnections, private 
             loadingDirectories.value = loadingDirectories.value + path
             error.value = null
             try {
-                val entries = if (demo) FakeFiles.list(path) else client().listFiles(cwd, path, on = machine)
+                val entries = client().listFiles(cwd, path, on = machine)
                 directories.value = directories.value + (path to entries)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { error.value = e.asHcError() }
@@ -71,7 +72,7 @@ class WorkspaceFilesViewModel(private val connections: HostConnections, private 
         operations.update { it + 1 }; error.value = null
         try {
             val old = if (more) file.value else null
-            val next = if (demo) FakeFiles.read(entry.path) else client().readFile(entry.path, cwd, offset = old?.last?.plus(1) ?: 1, limit = 1000, on = machine)
+            val next = client().readFile(entry.path, cwd, offset = old?.last?.plus(1) ?: 1, limit = 1000, on = machine)
             requireText(next)
             if (selectedFile.value == entry) file.value = if (old == null) next.copy(text = next.text.take(1_000_000)) else next.copy(first = old.first,
                 text = (old.text + (if (old.text.endsWith("\n") || old.text.isEmpty()) "" else "\n") + next.text).take(1_000_000))

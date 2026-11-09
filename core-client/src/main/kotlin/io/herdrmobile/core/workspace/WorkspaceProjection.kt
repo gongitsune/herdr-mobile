@@ -15,7 +15,6 @@ internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,J
     val spaces=linkedMapOf<String,S>()
     val records=terminals.associateBy { it.id }
     val placed=mutableMapOf<String,Pair<S,T>>()
-    fun title(t:Terminal)=t.name?.takeIf { it.isNotBlank() } ?: t.title.takeIf { it.isNotBlank() } ?: AgentDetector.detect(t)?.program ?: t.id
     fun pane(id:String,terminal:Terminal)=Pane(id,terminal,AgentDetector.detect(terminal))
     for ((machineKey,value) in documents) {
         val machine=machineKey.ifEmpty { null }
@@ -29,7 +28,7 @@ internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,J
             for (tabEntry in (doc["tabs"] as? JsonArray).orEmpty()) {
                 val tabDoc=tabEntry as? JsonObject ?: continue
                 val tabId=tabDoc.string("id").takeIf { it.isNotBlank() } ?: continue
-                val tab=T(qualify(tabId,machine),tabDoc.string("name").ifBlank { tabId })
+                val tab=T(qualify(tabId,machine),tabDoc.string("name"))
                 space.tabs[tab.id]=tab
                 fun walk(value:JsonElement?) {
                     val node=value as? JsonObject ?: return
@@ -61,7 +60,7 @@ internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,J
             S(spaceId,cwd.trimEnd('/').substringAfterLast('/').ifBlank { labelSpace },cwd,machine)
         }
         val tabId=qualify(labelTab ?: "terminal:${terminal.id}",machine)
-        val tab=space.tabs.getOrPut(tabId) { T(tabId,title(terminal)) }
+        val tab=space.tabs.getOrPut(tabId) { T(tabId,"") }
         tab.panes+=pane(terminal.id,terminal)
         placed[terminal.id]=space to tab
     }
@@ -83,8 +82,8 @@ internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,J
         }
     }
     return spaces.values.map { s ->
-        Space(s.id,s.name,s.cwd,s.tabs.values.map { tab ->
-            Tab(tab.id,tab.name,tab.panes.map { it.copy(subAgents=children[it.terminal.id].orEmpty()) })
+        Space(s.id,s.name,s.cwd,s.tabs.values.mapIndexed { index,tab ->
+            Tab(tab.id,tab.name.ifBlank { (index+1).toString() },tab.panes.map { it.copy(subAgents=children[it.terminal.id].orEmpty()) })
         },s.machine)
     }
 }

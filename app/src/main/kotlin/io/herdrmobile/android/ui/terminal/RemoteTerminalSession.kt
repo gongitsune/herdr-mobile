@@ -19,6 +19,9 @@ class RemoteTerminalSession(
     private val scope: CoroutineScope,
     private val observe: Boolean,
     control: () -> Boolean,
+    alt: () -> Boolean,
+    shift: () -> Boolean,
+    consumeModifiers: () -> Unit,
     private val ready: (Boolean) -> Unit,
     private val failed: (HcError) -> Unit,
     private val closed: (CloseReason) -> Unit,
@@ -32,9 +35,10 @@ class RemoteTerminalSession(
     private var rows = 24
     private var active = false
     private var job: Job? = null
-    private val callbacks = TerminalCallbacks(view, control, observe)
+    private val callbacks = TerminalCallbacks(view, control, alt, shift, observe)
     val terminal = TerminalSession(object : TerminalSession.RemoteIO {
         override fun write(bytes: ByteArray) {
+            consumeModifiers()
             if (!observe && active && inputs.trySend(Input.Bytes(bytes)).isFailure) { failed(HcError("input_overflow", "Remote input queue full")); dispose() }
         }
         override fun resize(cols: Int, newRows: Int) {
@@ -88,7 +92,10 @@ class RemoteTerminalSession(
             }
         }
     }
-    fun keyCode(code: Int, control: Boolean) { if (active && !observe) view.handleKeyCode(code, if (control) com.termux.terminal.KeyHandler.KEYMOD_CTRL else 0) }
+    fun keyCode(code: Int, control: Boolean, alt: Boolean, shift: Boolean) {
+        val modifiers = (if (control) com.termux.terminal.KeyHandler.KEYMOD_CTRL else 0) or (if (alt) com.termux.terminal.KeyHandler.KEYMOD_ALT else 0) or (if (shift) com.termux.terminal.KeyHandler.KEYMOD_SHIFT else 0)
+        if (active && !observe) view.handleKeyCode(code, modifiers)
+    }
     fun write(text: String) { terminal.write(text) }
     fun dispose() { active = false; ready(false); inputs.close(); job?.cancel() }
 }

@@ -12,6 +12,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -29,7 +30,10 @@ enum class WorkspacePanel { CHANGES, FILES }
 fun WorkspaceSheet(vm: WorkspaceFilesViewModel, initial: WorkspacePanel, dismiss: () -> Unit) {
     var panel by remember { mutableStateOf(initial) }
     val busy by vm.busy.collectAsStateWithLifecycle()
-    val error by vm.error.collectAsStateWithLifecycle()
+    val fileError by vm.error.collectAsStateWithLifecycle()
+    val changesError by vm.changesError.collectAsStateWithLifecycle()
+    val error = if (panel == WorkspacePanel.CHANGES) changesError else fileError
+    val notRepository = panel == WorkspacePanel.CHANGES && error?.kind == "not_repository"
     DisposableEffect(vm) { onDispose { vm.cancelLoads() } }
     LaunchedEffect(panel) {
         if (panel == WorkspacePanel.CHANGES) vm.refreshChanges() else vm.loadFolder()
@@ -47,8 +51,10 @@ fun WorkspaceSheet(vm: WorkspaceFilesViewModel, initial: WorkspacePanel, dismiss
                 } }
             }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            error?.let { Text(fileErrorMessage(it), Modifier.padding(12.dp), color = MaterialTheme.colorScheme.error) }
-            if (panel == WorkspacePanel.CHANGES) ChangesContent(vm, Modifier.weight(1f)) { entry ->
+            error?.takeUnless { notRepository }?.let { Text(fileErrorMessage(it), Modifier.padding(12.dp), color = MaterialTheme.colorScheme.error) }
+            if (notRepository) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(stringResource(R.string.not_repository), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else if (panel == WorkspacePanel.CHANGES) ChangesContent(vm, Modifier.weight(1f)) { entry ->
                 vm.open(FileEntry(entry.path.substringAfterLast('/'), entry.path, false)); panel = WorkspacePanel.FILES
             } else FilesContent(vm, Modifier.weight(1f))
         }

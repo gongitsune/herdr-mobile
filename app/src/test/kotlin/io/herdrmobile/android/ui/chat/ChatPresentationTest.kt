@@ -30,4 +30,25 @@ class ChatPresentationTest {
         assertFalse(canChooseOption(items, question, option.copy(keys = emptyList()), true, true, true))
         assertFalse(canChooseOption(items + question.copy(id = "new"), question, option, true, true, true))
     }
+    @Test fun numberedAnswersDistinguishManualOptionsFromInvalidNumbers() {
+        val q = question.copy(options = listOf(option, option.copy(label = "No", keys = listOf("Escape")), option.copy(keys = emptyList())))
+        assertEquals(q.options[1], numberedOption(q, " 2 "))
+        assertEquals(q.options[1], numberedOption(q, " ２ "))
+        assertEquals(q.options[2], numberedOption(q, "３"))
+        for (input in listOf("0", "-1", "+1", "4", "999999999999999", "yes", "1 hello")) assertNull(numberedOption(q, input))
+    }
+    @Test fun stopIsUnavailableDuringApprovalAndAfterSendingEvenWithStaleRunningActivity() {
+        assertTrue(canStopWorking(true, false, null, false))
+        assertFalse(canStopWorking(true, true, null, false))
+        assertFalse(canStopWorking(true, false, question, false))
+        assertFalse(canStopWorking(true, false, null, true))
+        assertFalse(canStopWorking(false, false, null, false))
+    }
+    @Test fun aQuestionFromAnEarlierPromptCannotBecomeThePinnedCard() {
+        assertEquals(question, activeQuestion(listOf(question), true))
+        val nextTurn = listOf(question, ChatItem.UserMessage("new", "Next task"))
+        assertNull(activeQuestion(nextTurn, true))
+        assertFalse(canChooseOption(nextTurn, question, option, true, true, true))
+        assertNull(activeQuestion(listOf(question), false))
+    }
 }

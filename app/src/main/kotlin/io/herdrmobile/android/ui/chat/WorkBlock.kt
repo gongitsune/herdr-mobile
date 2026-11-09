@@ -1,5 +1,9 @@
 package io.herdrmobile.android.ui.chat
 
+import androidx.compose.animation.core.*
+import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -16,7 +20,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.mikepenz.markdown.m3.Markdown
 import io.herdrmobile.android.R
 import io.herdrmobile.core.transcript.*
 
@@ -28,7 +31,9 @@ fun WorkBlock(turn: ChatTurn, blocked: Boolean, elapsed: String? = null) {
     val summary = buildList {
         if (turn.edits > 0) add(pluralStringResource(R.plurals.work_edits, turn.edits, turn.edits))
         if (turn.commands > 0) add(pluralStringResource(R.plurals.work_commands, turn.commands, turn.commands))
-        if (turn.edits == 0 && turn.commands == 0) {
+        val reads = turn.work.filterIsInstance<WorkRun.Tools>().flatMap { it.calls }.count { it.verb == "Read" }
+        if (reads > 0) add(pluralStringResource(R.plurals.work_reads, reads, reads))
+        if (turn.edits == 0 && turn.commands == 0 && reads == 0) {
             val tools = turn.work.filterIsInstance<WorkRun.Tools>().sumOf { it.calls.size }
             if (tools > 0) add(pluralStringResource(R.plurals.work_tools, tools, tools))
         }
@@ -36,6 +41,14 @@ fun WorkBlock(turn: ChatTurn, blocked: Boolean, elapsed: String? = null) {
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().clickable { preference = !expanded }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, stringResource(if (expanded) R.string.collapse else R.string.expand), Modifier.size(20.dp))
+            if (running) {
+                val pulse = if (blocked) 1f else {
+                    val animation = rememberInfiniteTransition(label = "working")
+                    val alpha by animation.animateFloat(0.4f, 1f, infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "working dot")
+                    alpha
+                }
+                Box(Modifier.padding(end = 6.dp).size(7.dp).alpha(pulse).background(if (blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, CircleShape))
+            }
             val title = when {
                 running && blocked -> stringResource(R.string.needs_you)
                 running -> elapsed?.let { stringResource(R.string.working_elapsed, it) } ?: stringResource(R.string.working_ellipsis)
@@ -47,7 +60,7 @@ fun WorkBlock(turn: ChatTurn, blocked: Boolean, elapsed: String? = null) {
         }
         if (expanded) turn.work.forEach { run -> when (run) {
             is WorkRun.Tools -> ToolRun(run.calls)
-            is WorkRun.Prose -> if (running) Markdown(run.item.markdown) else Text(run.item.markdown, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            is WorkRun.Prose -> if (running) ChatMarkdown(run.item.markdown) else Text(run.item.markdown, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             is WorkRun.Thought -> Thought(run.item)
         } }
     }

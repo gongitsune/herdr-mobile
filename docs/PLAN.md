@@ -311,11 +311,13 @@ data class ChangeEntry(val path: String, val oldPath: String? = null, val indexS
 data class ChangeSet(val cwd: String, val entries: List<ChangeEntry>, val diff: String,
                      val stagedDiff: String, val truncated: Boolean = false)
 // HcClient のメンバー:
+suspend fun gitBranch(cwd: String, on: String? = null): String?
 suspend fun changes(cwd: String, on: String? = null): ChangeSet
 suspend fun listFiles(cwd: String, path: String = ".", on: String? = null): List<FileEntry>
 suspend fun readFile(path: String, cwd: String? = null, offset: Long = 1,
                      limit: Int = 2000, on: String? = null): FileChunk
 ```
+`changes` は git status が「not a git repository」で失敗したとき `HcError(kind = "not_repository")` を投げる（それ以外の失敗は従来どおり）。
 
 ## Phase 5: ライブなチャット ＋ 全画面活用の Material 3 Expressive UI
 
@@ -452,12 +454,107 @@ data class Space(val id: String, val name: String, val cwd: String, val tabs: Li
 - **再接続中**（Phase 3 の stale 表示）：切断しても直前の documents を捨てない。接続が無いあいだは、TerminalStore の `staleTerminals` と直前の documents から投影した spaces を出し続ける。新しい snapshot が来たら通常の投影に戻す。doc.get の成否は直前のものを使う。
 - WorkspaceTest を更新：派生 Space が出ないこと、park（`herdr.space=""`）が出ないこと、サブエージェントが親の `subAgents` に入ること、kept サブエージェントが独立 Pane になること、doc.get 失敗 machine の取り込み抑止。
 
+- **タブ名**（実機確認で発覚 2026-11-09）：名前の無いタブ（document の `name` が空、またはラベルで取り込んだタブ）は ID ではなく、herdr-app の `Model::tab_name` と同じく **Space 内の 1 始まりの位置**（"1", "2", …）を名前にする。projection の最後、Space のタブ順が確定してから付ける。
+
 ### Phase 6 app 変更（codex-b）
 - Spaces 画面：`Space.derived` の参照があれば消す。Pane の `subAgents` は親 Pane の下に小さくまとめて出し、タップでその端末を開ける（attach / Chat はこれまでどおり）。
 - Agents（Console）画面：全端末からではなく、**WorkspaceStore の Space の Pane にいるエージェント** から作る（herdr-app の `agents()` と同じ）。サブエージェントは独立した行にせず、親の行の下にぶら下げる（件数と状態だけでもよい）。Blocked / Working / Done / Idle のグループ分けはそのまま。
 - 再接続中：WorkspaceStore は stale な spaces を出し続ける（codex-a）。Agents の行は、その端末が host の `staleTerminals` にあれば `stale=true` にする（Phase 3 と同じく薄く表示・無効化、グループの末尾）。stale な行は通知の遷移判定に使わない。
 - 通知（foreground 通知）の対象も Agents 一覧と同じ集合にする。サブエージェントは親の場所（Space / Tab）で知らせる。
 - codex-a の API が入るまでは、`Pane.subAgents` を Fake で使って進めてよい。
+
+## Phase 7: Ovis モバイル版に倣ったシンプルな UI
+
+### 背景（ユーザー指摘 2026-11-09）
+「チャットに『会話ログで確認』『送信済み』などの補足が出ているが要らない。シンプルで動線に迷いにくい UI にする。https://ovis.sh のモバイル版を参考に」。
+参考スクリーンショット（ovis.sh/assets/demo/*-phone-light.webp）を Claude が確認済み。考え方だけ取り入れ、コードや画像はコピーしない。
+
+### 方針：画面は「エージェント 1 枚」＋「左ドロワー」だけ
+- **下部ナビ（Agents / Spaces / Hosts）と NavigationRail を廃止する。** アプリのメイン画面は常に 1 つのエージェント画面。
+- 起動時は最後に開いたエージェントを開く。無ければドロワーを開いた状態にし、本文には「左のメニューからエージェントを選ぶ」だけを出す。
+- **左ドロワー**（☰ で開く。幅 600dp 以上では常時表示）：
+  - ホストごとの見出し：PC アイコン、ホスト名、接続の色ドット、右に折りたたみと「＋」（ホスト追加）。
+  - その下に Space の行：フォルダアイコン、Space 名、2 行目にブランチ（あれば）。
+  - Space の下に、ツリーの罫線つきでその Space のエージェント（Pane のエージェント）：プログラムアイコン、名前、ブランチやタブ名を薄く、右端に状態の印。
+    - working＝青ドット、blocked＝赤の「?」、done（未読）＝ドット、idle＝なし。
+  - サブエージェントはドロワーに出さない（親を開いてから辿る）。
+  - 下端：「Agents n」の折りたたみ（全エージェントの平たい一覧。Blocked が先頭）と、設定（歯車）。ホストの編集・削除・鍵は設定の中に入れる。
+  - 行をタップすると、そのエージェントを開いてドロワーを閉じる。今開いているものを強調表示する。
+- Phase 6 の「Space / Agents の出し方」（herdr-app と同じ集合）はそのまま使う。
+
+### エージェント画面
+- **トップバー**（1 段、スクロールで隠さない）：☰ ／ プログラムアイコン＋タイトル（1 行、省略）／ Chat・Terminal のアイコンだけのセグメント ／ ⋯。
+  - タイトルの下の状態行（Working… など）は消す。状態はチャット内とタブのドットで分かる。
+- **タブ行**：トップバーの下に、今のエージェントがいる Space のタブを横スクロールで出す。各タブに状態ドットと名前。選択中は下線。タブをタップすると、そのタブの最初のエージェント Pane を開く（エージェントが無ければシェルの端末を開く）。
+- ⋯ メニューは「中断（Ctrl-C 相当）」「終了（確認あり）」「閲覧専用 ⇔ 操作」だけにする。「ライブターミナル」「テキストを読む」は削除。
+
+### チャット
+- **削除するもの**：
+  - 送信のレシート（「送信済み」「回答待ち」「会話ログで確認」「未配信」）と `SendReceipts` 一式。
+  - チャット内のライブターミナル表示（`LiveActivity` の observe プレビュー）と Peek ボトムシート。ターミナルはトップバーのセグメント 1 タップで見る。
+  - 「Turn started / complete」系の区切り（残っていれば）。
+- **残すもの**（Ovis と同じ形）：
+  - user は右寄せの控えめな角丸カード。assistant は地の文の Markdown（コードブロックは言語名とコピーボタン付き）。
+  - Work block のヘッダー：`⌄ ● Working… · 1 edit · 1 file read`。blocked は赤ドットで `Needs you`。終わったら `Worked for 7s · …`。行は `› Read src/metrics.ts` 形式（動詞は通常、対象は等幅）。
+- **会話ログが見つからないとき**：説明文やボタンを並べない。チャットの代わりにターミナルを出し、セグメントの Chat は押せるが「会話ログが見つかりません」と 1 行と「候補から選ぶ」ボタン 1 つだけにする。
+- **質問・承認カード**：タイムラインの中ではなく、**入力欄のすぐ上に固定**して出す。
+  - 見出し（「コマンドを許可しますか？」などを赤字）、折りたたみ ⌄、対象（コマンドなど）を等幅の枠で、選択肢は番号付き（①Yes ②… ）。タップで選ぶ。
+  - カードが出ている間、入力欄のプレースホルダーは「1–n を入力して選択…」にし、数字を送るとその選択肢を選ぶ。
+- **入力欄**：角丸の大きなカード 1 つ。プレースホルダーは「<エージェント名> にメッセージ…」。右下の丸ボタンは、送信（↑）／working 中で入力が空なら停止（■＝中断）。
+  - 送信後の補足表示は出さない。送ったメッセージは会話ログに現れた時点で表示される（それまでは user カードを薄く仮表示してよいが、文言は付けない）。
+
+### ターミナル
+- 入力欄は出さない。ターミナルをタップするとソフトキーボードで直接打つ。
+- 下端にキーバー：`Esc` `Tab` `^C` `Ctrl` `Alt` `Shift` `Enter` と、右端の `^` で矢印キーなどを展開。
+
+### 担当
+- すべて codex-b（app）。core-client の変更は不要。必要になったら PLAN.md に書いてから codex-a に依頼する。
+- 不要になったコード・文字列リソース・テストは削除する。既存テスト・lint を通す。
+
+### Phase 7 レビュー修正（Claude レビュー 2026-11-09）
+**codex-a（core-client）**
+- `HcClient` に `suspend fun gitBranch(cwd: String, on: String? = null): String?` を追加する（`git --no-optional-locks symbolic-ref --short HEAD`、timeout 3 秒、リポジトリでない・detached・失敗時は null）。app から生の `machine.exec` を呼ばないようにするため。
+
+**codex-b（app）**
+- 指示していない機能の削除を戻す（シンプルさは「入口を減らす」で実現し、機能は消さない）：
+  - **Changes / Files**：ドロワーの Space 行の右端「⋯」から、以前のボトムシート（Changes / Files）を開く。`git show HEAD:` から復元し、新しい構成に結線する。テストも戻す。
+  - **新しい端末**：タブ行右端の「＋」で、今の Space に新しいタブとして端末を作る。ボトムシートで「シェル / Claude Code / Codex / コマンド入力」を選ぶ。cwd は Space の folder。ラベルは herdr-app の規約どおり `herdr.space=<Space のローカル ID>`、`herdr.tab=<新しい tb ID>`、`herdr.seen=0`（デスクトップが取り込む）。作ったらその端末を開く。
+  - **Demo**：入口が無いので、Demo 関連の死にコードと文字列を削除する。
+- 正しさの修正：
+  1. 保存した最後のエージェントが存在しない（接続済みで terminals の初回ロード後に見つからない）ときは、選択を消してドロワーを開く。「復旧中」のままにしない。
+  2. 停止ボタン（■）は `blocked` でなく、質問カードも出ていないときだけにする。承認待ちに Ctrl-C を送らない。
+  3. 送信直後 1 秒は停止に切り替えない（ダブルタップで中断しない）。
+  4. 番号入力は全角数字も受け付ける（NFKC か `Character.digit`）。数字でない入力や範囲外の番号は捨てずに、入力欄の下に短く「1–n の番号を入力」と出す（入力は残す）。keys の無い選択肢は押せない理由が分かる見た目にする（薄く表示）。
+  5. Ctrl / Alt / Shift は次の 1 キーで自動解除（Termux の extra keys と同じ）。ラベルは文字列リソースにする。
+  6. 戻るボタン：設定・ホスト編集・ボトムシートは閉じるだけにする。メイン画面でドロワーが開いていれば閉じる。
+  7. 幅 600dp 以上（ドロワー常時表示）では ☰ を出さない。
+  8. 開いたエージェントを切り替えたら古い TerminalViewModel を破棄する（ViewModelStore に溜めない）。
+  9. 送信・選択中も入力欄を disabled にしない（キーボードが閉じるため）。二重送信は送信ボタン側だけで防ぐ。
+- 見た目：
+  - 質問カードの見出しは汎用文言ではなく `Question.prompt` を出す（approval は赤字）。
+  - ドロワーのツリーは最後の子を `└` にする。
+  - 会話ログの読み込み中は「メッセージなし」ではなく、何も出さないか小さなローディングにする。
+  - ブランチは `HcClient.gitBranch` を使う。取得はドロワーを開いたときと Space 一覧が変わったときだけにする（30 秒ごとのポーリングはやめる）。codex-a の API が入るまでは今の実装のままでよい。
+
+### Phase 7 レビュー修正 2（Claude レビュー 2026-11-09）
+codex-b（app）:
+1. 新規端末の起動を herdr-app に合わせる：エージェントは `unix_agent_argv` と同じ `sh -ic '"$@"; exec "$0" -i' <shell> <agent argv…>` 形式（ログインシェルの PATH で探し、終了後はシェルが残る）、`keep=true`、`env TERM=xterm-256color`。シェルはそのまま `$SHELL -i` 相当。参照：ref/herdr-app/src/window.rs の `unix_agent_argv`（111 行付近）と hc.rs の `run`（438 行付近）。
+2. 新しいタブ ID は herdr-app と同じ `tb` + 16 進 32 桁。
+3. 質問カードの等幅枠は、`prompt` の重複表示になるので消す。
+4. 送信後 1 秒のクールダウンは送信 RPC 完了（finally）から数える。
+5. keys の無い選択肢の番号を打ったときは「この選択肢はターミナルで選んでください」と出す（範囲外とは別の文言）。
+6. 設定を開いても今のエージェントの ViewModel を破棄しない（下書きと attach を保つ）。
+7. 作成中のボトムシートは `sheetState.confirmValueChange` で閉じられないようにする。
+8. ドロワーのツリーで最後に実際に表示される行を `└` にする。
+9. リモート machine で `terminal.run` が返す address と terminals 一覧の ID 形式（`mac/tN`）が一致するか、`HC_SESSION=herdr-mobile-it` のテストか既存の結合テストの知見で確認し、ずれるなら正規化する（default セッションは使わない）。
+   - 確認結果（codex-b）: 参照 core の `crates/herdr-core/src/remote.rs` では `forward_once` が run 応答を `localize` し、一覧用の mirror 取り込みも同じ `localize_in` で address を修飾する。既存 `crates/herdr-core/tests/remote.rs` の `two_machines_that_added_each_other_list_at_once` は一覧の `rohan/tN` を検証し、リモート起動テストも run 応答の `rohan/` prefix を検証する。app の `Terminal.id` は address そのものなので追加の正規化は不要。core の起動・操作はしていない。
+
+### Phase 7 実機確認の修正（2026-11-09）
+- **codex-a**：`changes(cwd)` は、cwd が git リポジトリでないとき（`git status` が「not a git repository」で失敗）に `HcError(kind = "not_repository")` を投げる。それ以外の失敗は今までどおり。テストを追加。
+- **codex-b**：
+  1. Changes タブで `not_repository` のときは、エラーの赤字ではなく、中央に控えめな「Git リポジトリではありません」を出す（Files タブはそのまま使える）。codex-a が入るまでは、kind を見る分岐だけ先に作ってよい。
+  2. 「＋」の新規端末シートは、縦に並んだチップをやめ、アイコン付きの 1 行リスト（シェル / Claude Code / Codex / コマンド…）にする。行をタップしたらすぐ作成する（「コマンド…」だけは入力欄を出してから作成）。「作成」ボタンは不要。作成中はその行にローディングを出す。
+  3. ドロワーのツリー線：子が 1 つでも `└` が見えるようにする（今は表示されていない。罫線の色・太さ・位置を見直す）。
 
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。

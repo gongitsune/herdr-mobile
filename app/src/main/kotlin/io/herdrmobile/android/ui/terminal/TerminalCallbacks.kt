@@ -13,7 +13,7 @@ import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import io.herdrmobile.android.R
 
-internal class TerminalCallbacks(private val view: TerminalView, private val control: () -> Boolean, private val observe: Boolean) : TerminalSessionClient, TerminalViewClient {
+internal class TerminalCallbacks(private val view: TerminalView, private val control: () -> Boolean, private val alt: () -> Boolean, private val shift: () -> Boolean, private val observe: Boolean) : TerminalSessionClient, TerminalViewClient {
     override fun onTextChanged(session: TerminalSession) = view.onScreenUpdated()
     override fun onTitleChanged(session: TerminalSession) = Unit
     override fun onSessionFinished(session: TerminalSession) = view.onScreenUpdated()
@@ -44,8 +44,8 @@ internal class TerminalCallbacks(private val view: TerminalView, private val con
     override fun onKeyUp(keyCode: Int, e: KeyEvent) = observe
     override fun onLongPress(event: MotionEvent) = false
     override fun readControlKey() = control()
-    override fun readAltKey() = false
-    override fun readShiftKey() = false
+    override fun readAltKey() = alt()
+    override fun readShiftKey() = shift()
     override fun readFnKey() = false
     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession) = observe
     override fun onEmulatorSet() = Unit

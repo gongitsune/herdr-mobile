@@ -7,9 +7,9 @@ import kotlinx.serialization.json.*
 import java.util.Base64
 
 internal data class ExecRead(val code:Int?,val stdout:ByteArray,val stderr:ByteArray,val truncated:Boolean,val timedOut:Boolean)
-internal suspend fun HcClient.execRead(argv:List<String>,cwd:String?=null,on:String?=null):ExecRead {
+internal suspend fun HcClient.execRead(argv:List<String>,cwd:String?=null,on:String?=null,timeout:Int=10):ExecRead {
     val result=call("machine.exec",buildJsonObject {
-        put("argv",JsonArray(argv.map(::JsonPrimitive))); put("timeout",10)
+        put("argv",JsonArray(argv.map(::JsonPrimitive))); put("timeout",timeout)
         cwd?.let { put("cwd",it) }; on?.let { put("on",it) }
     }).jsonObject
     return ExecRead((result["code"] as? JsonPrimitive)?.intOrNull,

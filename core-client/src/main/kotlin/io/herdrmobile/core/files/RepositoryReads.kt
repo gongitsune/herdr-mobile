@@ -2,12 +2,31 @@ package io.herdrmobile.core.files
 
 import io.herdrmobile.core.HcClient
 import io.herdrmobile.core.rpc.HcError
+import kotlinx.coroutines.CancellationException
+
+// Pin gettext output so error classification does not depend on the host locale.
+private val gitCommand=listOf("env","LC_ALL=C","LANGUAGE=","git")
+
+internal suspend fun readGitBranch(client:HcClient,cwd:String,on:String?):String? = try {
+    val result=client.execRead(gitCommand+listOf("--no-optional-locks","symbolic-ref","--short","HEAD"),cwd,on,timeout=3)
+    if(result.code!=0 || result.timedOut || result.truncated) null
+    else result.stdout.decodeToString().trim().takeIf { it.isNotEmpty() }
+} catch(e:CancellationException) {
+    throw e
+} catch(_:Exception) {
+    null
+}
 
 internal suspend fun readChanges(client:HcClient,cwd:String,on:String?):ChangeSet {
     // Read-only git options avoid index refresh/fsmonitor writes and external diff/textconv programs.
-    val git=listOf("git","--no-pager","--no-optional-locks","-c","core.fsmonitor=false","-c","diff.autoRefreshIndex=false",
+    val git=gitCommand+listOf("--no-pager","--no-optional-locks","-c","core.fsmonitor=false","-c","diff.autoRefreshIndex=false",
         "-c","core.hooksPath=/dev/null","-c","color.ui=false")
-    val status=client.execRead(git+listOf("status","--porcelain=v2","-z","--untracked-files=normal"),cwd,on).requireSuccess()
+    val status=client.execRead(git+listOf("status","--porcelain=v2","-z","--untracked-files=normal"),cwd,on)
+    if(status.code==128 && !status.timedOut &&
+        "not a git repository" in status.stderr.decodeToString()) {
+        throw HcError("not_repository","Not a Git repository")
+    }
+    status.requireSuccess()
     if(status.truncated) throw HcError("unsupported","Git status exceeds the response limit")
     val diff=client.execRead(git+listOf("diff","--no-ext-diff","--no-textconv","--"),cwd,on).requireSuccess()
     val staged=client.execRead(git+listOf("diff","--cached","--no-ext-diff","--no-textconv","--"),cwd,on).requireSuccess()
