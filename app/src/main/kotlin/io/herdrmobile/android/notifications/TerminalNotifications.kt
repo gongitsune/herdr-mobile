@@ -25,8 +25,8 @@ class TerminalNotifications(private val application: Application, connections: H
         application.registerActivityLifecycleCallbacks(this)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, application.getString(R.string.notification_channel), NotificationManager.IMPORTANCE_DEFAULT))
         scope.launch {
-            combine(connections.terminals, connections.statuses, foreground) { rows, hosts, visible ->
-                transitions.update(rows, hosts, visible)
+            combine(connections.agents, connections.statuses, foreground) { rows, hosts, visible ->
+                transitions.update(io.herdrmobile.android.connection.notificationAgents(rows), hosts, visible)
             }.collect { changes -> changes.forEach(::post) }
         }
     }
@@ -47,7 +47,7 @@ class TerminalNotifications(private val application: Application, connections: H
         val notification = Notification.Builder(application, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification_terminal)
             .setContentTitle(application.getString(R.string.notification_title, status, title))
-            .setContentText(row.hostName)
+            .setContentText(listOfNotNull(row.hostName, row.spaceName, row.tabName).joinToString(" / "))
             .setContentIntent(pending)
             .setAutoCancel(true)
             .setOnlyAlertOnce(false)

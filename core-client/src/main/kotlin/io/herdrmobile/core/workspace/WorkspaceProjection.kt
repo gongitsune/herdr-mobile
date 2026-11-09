@@ -10,7 +10,7 @@ private fun JsonObject.string(key: String) = (get(key) as? JsonPrimitive)?.conte
 /** Pure projection: documents are read, never normalized back into desktop storage. */
 internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,JsonElement>): List<Space> {
     data class T(val id: String,val name: String,val panes: MutableList<Pane> = mutableListOf())
-    data class S(val id:String,var name:String,var cwd:String,val machine:String?,val derived:Boolean,
+    data class S(val id:String,var name:String,var cwd:String,val machine:String?,
                  val tabs:LinkedHashMap<String,T> = linkedMapOf())
     val spaces=linkedMapOf<String,S>()
     val records=terminals.associateBy { it.id }
@@ -24,7 +24,7 @@ internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,J
             val rawId=doc.string("id").takeIf { it.isNotBlank() } ?: continue
             val id=qualify(rawId,machine)
             val folder=doc.string("folder")
-            val space=S(id,doc.string("name").ifBlank { folder.trimEnd('/').substringAfterLast('/').ifBlank { rawId } },folder,machine,false)
+            val space=S(id,doc.string("name").ifBlank { folder.trimEnd('/').substringAfterLast('/').ifBlank { rawId } },folder,machine)
             spaces[id]=space
             for (tabEntry in (doc["tabs"] as? JsonArray).orEmpty()) {
                 val tabDoc=tabEntry as? JsonObject ?: continue
@@ -47,32 +47,47 @@ internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,J
             }
         }
     }
-    val visiting=mutableSetOf<String>()
-    fun place(terminal:Terminal): Pair<S,T> {
-        placed[terminal.id]?.let { return it }
+    val ordered=terminals.sortedWith(compareBy<Terminal> { it.created_ms }.thenBy { it.id })
+    for (terminal in ordered) {
+        if (terminal.id in placed || terminal.state != "live") continue
         val machine=machineOf(terminal.id)
-        val labelSpace=terminal.labels["herdr.space"]?.takeIf { it.isNotBlank() }
-        val labelTab=terminal.labels["herdr.tab"]?.takeIf { it.isNotBlank() }
-        if(labelSpace==null && labelTab==null && visiting.add(terminal.id)) {
-            val parent=terminal.parent?.let { records[qualify(it,machine)] }
-            if(parent!=null && parent.id !in visiting) {
-                val position=place(parent)
-                position.second.panes+=pane(terminal.id,terminal)
-                placed[terminal.id]=position
-                visiting.remove(terminal.id)
-                return position
-            }
+        // A present key means doc.get succeeded, even when its value is JsonNull.
+        if ((machine ?: "") !in documents) continue
+        val labelSpace=terminal.labels["herdr.space"]?.takeIf { it.isNotEmpty() } ?: continue
+        val labelTab=terminal.labels["herdr.tab"]?.takeIf { it.isNotEmpty() }
+        val cwd=terminal.foreground?.cwd ?: terminal.cwd
+        val spaceId=qualify(labelSpace,machine)
+        val space=spaces.getOrPut(spaceId) {
+            S(spaceId,cwd.trimEnd('/').substringAfterLast('/').ifBlank { labelSpace },cwd,machine)
         }
-        visiting.remove(terminal.id)
-        val cwd=terminal.cwd
-        val spaceId=qualify(labelSpace ?: "derived:$cwd",machine)
-        val space=spaces.getOrPut(spaceId) { S(spaceId,cwd.trimEnd('/').substringAfterLast('/').ifBlank { "Terminals" },cwd,machine,labelSpace==null) }
-        if(space.cwd.isEmpty()) space.cwd=cwd
         val tabId=qualify(labelTab ?: "terminal:${terminal.id}",machine)
         val tab=space.tabs.getOrPut(tabId) { T(tabId,title(terminal)) }
         tab.panes+=pane(terminal.id,terminal)
-        return (space to tab).also { placed[terminal.id]=it }
+        placed[terminal.id]=space to tab
     }
-    terminals.sortedWith(compareBy<Terminal> { it.created_ms }.thenBy { it.id }).forEach { place(it) }
-    return spaces.values.map { s -> Space(s.id,s.name,s.cwd,s.tabs.values.map { Tab(it.id,it.name,it.panes.toList()) },s.machine,s.derived) }
+    val children=mutableMapOf<String,MutableList<Pane>>()
+    for (terminal in ordered.filter { it.id !in placed && isSubAgent(it) }) {
+        var current=terminal
+        val visited=mutableSetOf(terminal.id)
+        for (depth in 0 until 32) {
+            val parent=current.parent?.takeIf { it.isNotEmpty() }
+                ?.let { qualify(it,machineOf(current.id)) } ?: break
+            if (!visited.add(parent)) break
+            if (parent in placed) {
+                children.getOrPut(parent) { mutableListOf() }+=pane(terminal.id,terminal)
+                break
+            }
+            current=records[parent] ?: break
+            // Kept descendants belong to their own pane, never to an earlier ancestor.
+            if (!isSubAgent(current)) break
+        }
+    }
+    return spaces.values.map { s ->
+        Space(s.id,s.name,s.cwd,s.tabs.values.map { tab ->
+            Tab(tab.id,tab.name,tab.panes.map { it.copy(subAgents=children[it.terminal.id].orEmpty()) })
+        },s.machine)
+    }
 }
+
+private fun isSubAgent(terminal: Terminal): Boolean =
+    !terminal.parent.isNullOrEmpty() && terminal.labels["herdr.space"].isNullOrEmpty()

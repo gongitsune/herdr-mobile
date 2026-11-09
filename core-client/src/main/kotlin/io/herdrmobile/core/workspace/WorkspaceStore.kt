@@ -13,6 +13,7 @@ import java.io.Closeable
 class WorkspaceStore(private val client: HcClient, scope: CoroutineScope) : Closeable {
     private val owned=CoroutineScope(scope.coroutineContext+SupervisorJob(scope.coroutineContext[Job]))
     private val terminals=TerminalStore(client,owned)
+    // Keys contain only successful reads; JsonNull is an available, empty document.
     private val documents=MutableStateFlow<Map<String,JsonElement>>(emptyMap())
     private val mutable=MutableStateFlow<List<Space>>(emptyList())
     val spaces: StateFlow<List<Space>> = mutable.asStateFlow()
@@ -21,7 +22,9 @@ class WorkspaceStore(private val client: HcClient, scope: CoroutineScope) : Clos
     private val readLock=Mutex()
     init {
         owned.launch {
-            combine(terminals.terminals,documents) { records,docs -> projectWorkspace(records,docs) }
+            combine(terminals.terminals,terminals.staleTerminals,terminals.snapshotConnection,documents) { records,stale,conn,docs ->
+                projectWorkspace(if(conn==null) stale else records,docs)
+            }
                 .flowOn(Dispatchers.Default)
                 .collect { mutable.value=it }
         }
@@ -29,8 +32,7 @@ class WorkspaceStore(private val client: HcClient, scope: CoroutineScope) : Clos
             combine(terminals.snapshotConnection,terminals.documentEpoch,
                 terminals.terminals.map { list -> list.mapNotNull { machineOf(it.id) }.toSet() }.distinctUntilChanged()) { conn,_,_ -> conn }
                 .collectLatest { conn ->
-                    if(conn==null) documents.value=emptyMap()
-                    else refresh()
+                    if(conn!=null) refresh()
                 }
         }
     }
@@ -46,7 +48,7 @@ class WorkspaceStore(private val client: HcClient, scope: CoroutineScope) : Clos
                 val result=conn.call("doc.get",buildJsonObject { put("name","herdr-app"); if(machine.isNotEmpty()) put("on",machine) }).jsonObject
                 next[machine]=result["value"] ?: JsonNull
             } catch(e:CancellationException) { throw e }
-            catch(e:Exception) { failed=connectionError(e); next[machine]=JsonNull }
+            catch(e:Exception) { failed=connectionError(e) }
         }
         if(conn === client.connection) { documents.value=next; failure.value=failed }
     }

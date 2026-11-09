@@ -62,9 +62,10 @@ class Phase4IntegrationTest {
                     put("labels",buildJsonObject { put("herdr-mobile-test","1") })
                 }))
                 created+=child
-                val spaces=workspace!!.spaces.first { spaces -> spaces.any { space -> space.id==spaceId && space.tabs.any { it.panes.size==2 } } }
+                val spaces=workspace!!.spaces.first { spaces -> spaces.any { space -> space.id==spaceId && space.tabs.any { it.panes.any { pane -> pane.subAgents.any { sub -> sub.terminal.id==child.id } } } } }
                 val tab=spaces.first { it.id==spaceId }.tabs.single()
-                assertEquals(setOf(primary.id,child.id),tab.panes.map { it.terminal.id }.toSet())
+                assertEquals(primary.id,tab.panes.single().terminal.id)
+                assertEquals(listOf(child.id),tab.panes.single().subAgents.map { it.terminal.id })
                 source=TranscriptSource(client,primary.id,scope,pollIntervalMs=50)
                 val chat=source!!.items.first { it.any { row -> row is ChatItem.AssistantText } }
                 assertEquals("Synthetic integration answer",chat.filterIsInstance<ChatItem.AssistantText>().single().markdown)

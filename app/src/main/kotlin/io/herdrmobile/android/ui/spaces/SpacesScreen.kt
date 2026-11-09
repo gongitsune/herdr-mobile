@@ -77,6 +77,12 @@ fun SpaceDetailScreen(vm: SpacesViewModel, hostId: String, spaceId: String, conn
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(pane.title, style = MaterialTheme.typography.titleSmall); StatusChip(pane.status ?: "idle") }
                         Text(pane.cwd, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         ObservePreview(connections, space.hostId, pane.terminalId, Modifier.fillMaxWidth().height(200.dp))
+                        pane.subAgents.forEach { child ->
+                            Row(Modifier.fillMaxWidth().clickable { openTerminal(space.hostId, child.terminalId) }.padding(start = 16.dp, top = 4.dp, bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(child.title, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                StatusChip(child.status ?: "idle")
+                            }
+                        }
                         TextButton(onClick = { openTerminal(space.hostId, pane.terminalId) }) { Icon(Icons.Default.Terminal, null); Spacer(Modifier.width(6.dp)); Text(stringResource(R.string.open_agent)) }
                     }
                 }

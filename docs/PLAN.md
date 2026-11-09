@@ -198,7 +198,7 @@ staleTerminals は明示 close 後も新 snapshot まで保持される。app �
 ### 構成モデル（読み取り専用）
 - Space / Tab / Pane は、core の document `herdr-app`（`doc.get`、`doc` イベントで読み直す）と端末ラベル `herdr.*` から組み立てる。`docs/labels.md` の規約に従う。
 - **`herdr-app` document には絶対に書き込まない**（デスクトップの配置が壊れる。Heeler ADR 0032）。新しい端末を Space に入れるときは、herdr-app の規約どおりのラベルを付けて取り込ませる。
-- ラベルの無い端末は cwd ごとの「派生 Space」に入れる。別の端末の子（サブエージェント）は親と同じ Tab の Pane にする。
+- ~~ラベルの無い端末は cwd ごとの「派生 Space」に入れる。~~ → **Phase 6 で廃止**。Space の出し方は herdr-app に合わせる（下の「Phase 6」節）。
 - Agent 判定: foreground プログラムを unwrap して（`sh -c`、`npx`、herdr-app のラッパー）、claude / codex などの既知エージェントか、Program Status を報告しているかで決める。
 
 ### チャット（会話ログ）
@@ -422,6 +422,42 @@ suspend fun readFile(path: String, cwd: String? = null, offset: Long = 1,
   - 状態は「送信済み」「回答待ち（Approval/Question カードへ飛ぶ）」「会話ログで確認」「未配信（入力欄に文字が残っている場合）」の 4 つ。
   - 根拠がなければ「完了」とは言わない。
 - **ターミナルの覗き見**：作業中のライブ表示をタップしたとき、またはメニューから開いたとき、チャットの上にボトムシートでライブのターミナルを出す（Ovis の terminal peek）。全画面の Terminal 切替とは別にする。
+
+## Phase 6: Space と Agents の出し方を herdr-app に合わせる
+
+### 背景（ユーザー指摘 2026-11-09）
+「モバイルから見えるスペースがホストの herdr-app からは見えない」。原因は、モバイルだけが `herdr.space` の無い端末から cwd ごとの派生 Space（`derived:<cwd>`）を作っていたこと。
+ユーザー決定：**基本的に herdr-app の挙動に合わせる**。
+
+herdr-app の挙動（`ref/herdr-app/src/window.rs` の `reconcile` / `adoptable` / `adopt` / `sync` / `world`）：
+- Space は document `herdr-app` にある Space だけ。それに加えて、document に載っていない live な端末のうち **`herdr.space` が空でないもの** だけを取り込む（adopt）。
+  - 取り込むのは、その machine の document を読めたときだけ（doc.get が成功した。値が null でもよい）。読めなかった machine の端末は取り込まない。
+  - `herdr.tab` があればその Tab に入れる。無ければ端末ごとに新しい Tab。知らない Space/Tab はラベルの ID で名前なしに作る（Space 名は folder の basename。folder は foreground の cwd → cwd の順）。
+- `herdr.space` が無い・空の端末（park した端末、`hc run` で起動した端末など）は **Space に出さない**。
+- サブエージェント（`parent` を持ち、`herdr.space` が無い端末）は自分の Pane を持たない。親の Pane に属する（`world()` の `sub_agents`）。`herdr.space` を持つサブエージェントは「kept」として普通に取り込む。
+- Agents 一覧（`agents()`）は **Space の Pane にいるエージェントだけ**。
+
+### Phase 6 公開 API 変更（codex-a）
+```kotlin
+// 変更: derived を削除、subAgents を追加
+data class Pane(val id: String, val terminal: Terminal, val agent: AgentInfo? = null,
+                val subAgents: List<Pane> = emptyList())   // 親チェーンをたどってこの Pane に属する、herdr.space の無い子孫（作成順、平坦）
+data class Space(val id: String, val name: String, val cwd: String, val tabs: List<Tab>,
+                 val machine: String? = null)
+```
+- `projectWorkspace` は上の規則に従う。`derived:` の Space は作らない。
+- 親が Space に無い（親も未配置）サブエージェントは出さない。親チェーンは最大 32 段、循環しても止まること。
+- doc.get が失敗した machine では、ラベルによる取り込みをしない（document 由来のものも無いので、その machine の Space は空）。`error` は従来どおり出す。
+- document の pane にある端末は、`parent` があって `herdr.space` が無くても、その pane に出す（document が優先。herdr-app も model の pane をそのまま出す）。サブエージェント扱いにするのは document に載っていない端末だけ。
+- **再接続中**（Phase 3 の stale 表示）：切断しても直前の documents を捨てない。接続が無いあいだは、TerminalStore の `staleTerminals` と直前の documents から投影した spaces を出し続ける。新しい snapshot が来たら通常の投影に戻す。doc.get の成否は直前のものを使う。
+- WorkspaceTest を更新：派生 Space が出ないこと、park（`herdr.space=""`）が出ないこと、サブエージェントが親の `subAgents` に入ること、kept サブエージェントが独立 Pane になること、doc.get 失敗 machine の取り込み抑止。
+
+### Phase 6 app 変更（codex-b）
+- Spaces 画面：`Space.derived` の参照があれば消す。Pane の `subAgents` は親 Pane の下に小さくまとめて出し、タップでその端末を開ける（attach / Chat はこれまでどおり）。
+- Agents（Console）画面：全端末からではなく、**WorkspaceStore の Space の Pane にいるエージェント** から作る（herdr-app の `agents()` と同じ）。サブエージェントは独立した行にせず、親の行の下にぶら下げる（件数と状態だけでもよい）。Blocked / Working / Done / Idle のグループ分けはそのまま。
+- 再接続中：WorkspaceStore は stale な spaces を出し続ける（codex-a）。Agents の行は、その端末が host の `staleTerminals` にあれば `stale=true` にする（Phase 3 と同じく薄く表示・無効化、グループの末尾）。stale な行は通知の遷移判定に使わない。
+- 通知（foreground 通知）の対象も Agents 一覧と同じ集合にする。サブエージェントは親の場所（Space / Tab）で知らせる。
+- codex-a の API が入るまでは、`Pane.subAgents` を Fake で使って進めてよい。
 
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。

@@ -59,9 +59,17 @@ fun ConsoleScreen(vm: ConsoleViewModel, peek: (ConsoleTerminal) -> Unit, openTer
                     modifier = Modifier.fillMaxWidth().alpha(if (row.stale) 0.45f else 1f),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     leadingContent = { ProgramAvatar(AgentDetector.detect(row.terminal)?.kind) },
-                    supportingContent = { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    supportingContent = { Column { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(if (row.stale) stringResource(R.string.stale_terminals) else agentStateSentence(row.terminal.status?.state, title), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(row.hostName, Modifier.widthIn(max = 96.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+                    }
+                        row.subAgents.forEach { child ->
+                            Row(Modifier.fillMaxWidth().alpha(if (child.stale && !row.stale) 0.45f else 1f).combinedClickable(enabled = !child.stale && !row.stale, onClick = { openTerminal(child.hostId, child.terminal.id) }, onLongClick = { peek(child) }).padding(start = 12.dp, top = 6.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(child.terminal.title.ifBlank { child.terminal.name ?: child.terminal.id }, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (child.stale) Text(stringResource(R.string.stale_terminals), style = MaterialTheme.typography.labelSmall)
+                                else StatusChip(child.terminal.status?.state ?: "idle")
+                            }
+                        }
                     } },
                     trailingContent = { Box(Modifier.size(8.dp).background(statusColor(row.terminal.status?.state.orEmpty()), CircleShape)) }
                 ) { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) }

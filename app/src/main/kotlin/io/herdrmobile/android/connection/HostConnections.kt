@@ -15,8 +15,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 data class HostStatus(val host: SavedHost, val state: ConnectionState)
-data class ConsoleTerminal(val hostId: String, val hostName: String, val terminal: Terminal, val stale: Boolean = false)
-data class HostWorkspace(val hostId: String, val hostName: String, val spaces: List<Space>, val error: HcError?)
+data class ConsoleTerminal(val hostId: String, val hostName: String, val terminal: Terminal, val stale: Boolean = false,
+    val subAgents: List<ConsoleTerminal> = emptyList(), val spaceName: String? = null, val tabName: String? = null)
+data class HostWorkspace(val hostId: String, val hostName: String, val spaces: List<Space>, val error: HcError?, val staleTerminalIds: Set<String> = emptySet())
 data class TrustRequest(val host: SavedHost, val fingerprint: String, val answer: CompletableDeferred<Boolean>)
 
 /** One instance per Application. Each host has one SSH client and event store. */
@@ -31,6 +32,7 @@ class HostConnections(private val repository: HostsRepository, parentScope: Coro
     val terminals = mutableTerminals.asStateFlow()
     private val mutableWorkspaces = MutableStateFlow<List<HostWorkspace>>(emptyList())
     val workspaces = mutableWorkspaces.asStateFlow()
+    val agents = workspaces.map(::workspaceAgents).stateIn(scope, SharingStarted.Eagerly, emptyList())
     private val mutableTrust = MutableStateFlow<TrustRequest?>(null)
     val trust = mutableTrust.asStateFlow()
     private val trustLock = Mutex()
@@ -79,7 +81,8 @@ class HostConnections(private val repository: HostsRepository, parentScope: Coro
     }
     private fun publish() {
         checkMain()
-        mutableWorkspaces.value = entries.values.map { HostWorkspace(it.host.id, it.host.name, it.workspace.spaces.value, it.workspace.error.value) }
+        mutableWorkspaces.value = entries.values.map { HostWorkspace(it.host.id, it.host.name, it.workspace.spaces.value, it.workspace.error.value,
+            it.store.staleTerminals.value.map { terminal -> terminal.id }.toSet()) }
         mutableStatuses.value = entries.values.map { HostStatus(it.host, it.client.state.value) }
         mutableTerminals.value = entries.values.flatMap { entry ->
             consoleRows(entry.host.id, entry.host.name, entry.client.state.value,
