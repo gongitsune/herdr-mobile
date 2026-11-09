@@ -1,6 +1,7 @@
 package io.herdrmobile.core
 
 import io.herdrmobile.core.model.*
+import io.herdrmobile.core.files.execRead
 import io.herdrmobile.core.transcript.*
 import io.herdrmobile.core.workspace.AgentKind
 import kotlinx.coroutines.*
@@ -9,6 +10,8 @@ import kotlinx.serialization.json.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable
 import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import kotlin.test.*
 
 /** Only synthetic agent state in a temporary directory; no real CLI or account is started. */
@@ -90,6 +93,29 @@ class TranscriptNotStartedIntegrationTest {
                     assertFalse(ready.binding.confirmed)
                     assertEquals("Synthetic first prompt",source!!.items.value.filterIsInstance<ChatItem.UserMessage>().single().text)
                     assertTrue(source!!.items.value.any { it is ChatItem.AssistantText })
+                    val previous=source!!.items.value
+                    source!!.close()
+                    source=TranscriptSource(client,id,scope)
+                    assertEquals(ready,source!!.state.value,"A reopened real-core transcript is immediately Ready")
+                    assertSame(previous,source!!.items.value)
+                    client.close()
+                    delay(50)
+                    assertEquals(ready,source!!.state.value,"Disconnect must keep the conversation visible")
+                    assertSame(previous,source!!.items.value)
+                    val append=if(kind==AgentKind.CLAUDE_CODE)
+                        """{"type":"assistant","uuid":"a2","parentUuid":"a","sessionId":"fixture-session","message":{"id":"m2","content":[{"type":"text","text":"After reconnect"}]}}"""
+                    else """{"type":"event_msg","payload":{"type":"agent_message","message":"After reconnect"}}"""
+                    Files.writeString(Path.of(ready.binding.path),append+"\n",StandardOpenOption.APPEND)
+                    client.connect()
+                    val updated=source!!.items.first { items -> items.any { it is ChatItem.AssistantText && it.markdown=="After reconnect" } }
+                    assertEquals(1,updated.filterIsInstance<ChatItem.UserMessage>().size)
+                    if(kind==AgentKind.CODEX) {
+                        val tail=client.execRead(listOf("python3","-c",CODEX_TAIL_SCRIPT,ready.binding.path))
+                        assertEquals(0,tail.code)
+                        assertFalse(tail.truncated)
+                        assertTrue(tail.stdout.size<=CODEX_TAIL_BYTES)
+                        assertContains(tail.stdout.decodeToString(),"After reconnect")
+                    }
                 }
             } finally {
                 withContext(NonCancellable) {

@@ -9,6 +9,45 @@ import java.util.Base64
 import kotlin.test.*
 
 class CodexResolverTest {
+    @Test fun screenCandidatesStartWithTheEightMostRecentlyUpdatedRollouts():Unit=runBlocking {
+        val terminal=Terminal(address="t1",state="live",pid=11,cwd="/project",
+            foreground=Foreground(pid=11,name="codex",argv=listOf("codex")))
+        val answer="A distinctive and sufficiently detailed answer about terminal ownership, concurrent candidates and verified conversation history."
+        val reads=java.util.concurrent.ConcurrentLinkedQueue<String>()
+        val peer=FakeCoreTransport()
+        peer.intercept={ request ->
+            when(FakeCoreTransport.method(request)) {
+                "machine.exec" -> {
+                    val argv=request["params"].obj()["argv"].arr()
+                    val text=if(argv.size==4) {
+                        val path=argv.last().str()
+                        reads+=path
+                        val message=if(path=="/fixture/15.jsonl") answer else "answer $path"
+                        """{"type":"event_msg","payload":{"type":"agent_message","message":"$message"}}"""+"\n"
+                    } else buildJsonObject {
+                        put("process_key","11:1:11:1"); put("process_started_ms",1000)
+                        put("stored",buildJsonArray { for(i in 0..15) add(buildJsonObject {
+                            put("session_id","$i"); put("path","/fixture/$i.jsonl")
+                            put("created_ms",100); put("updated_at",i); put("same_cwd",true)
+                        }) })
+                    }.toString()
+                    val data=Base64.getEncoder().encodeToString(text.toByteArray())
+                    peer.respond(request,"""{"code":0,"stdout":"$data","stderr":"","truncated":false,"timed_out":false}""")
+                    true
+                }
+                "terminal.read" -> { peer.respond(request,buildJsonObject { put("text","• $answer") }.toString()); true }
+                else -> false
+            }
+        }
+        val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+        val client=HcClient(TransportFactory { peer },scope,autoReconnect=false)
+        try {
+            client.connect()
+            assertEquals("15",SessionResolver(client).resolve(terminal).binding?.sessionId)
+            assertEquals((8..15).map { "/fixture/$it.jsonl" }.toSet(),reads.toSet())
+        } finally { client.close(); scope.cancel() }
+    }
+
     @Test fun notStartedNeedsVerifiedInventoryAndAnEmptyScreen():Unit=runBlocking {
         val terminal=Terminal(address="t1",state="live",pid=11,cwd="/project",
             foreground=Foreground(pid=11,name="codex",argv=listOf("codex")))
@@ -62,14 +101,27 @@ class CodexResolverTest {
         peer.intercept={ request ->
             when(FakeCoreTransport.method(request)) {
                 "machine.exec" -> {
-                    val info=buildJsonObject {
-                        put("process_key",process); put("process_started_ms",1000)
-                        put("stored",buildJsonArray { for((id,created) in rows) add(buildJsonObject {
-                            put("session_id",id); put("path","/fixture/$id.jsonl"); put("created_ms",created); put("same_cwd",true)
-                        }) })
+                    val argv=request["params"].obj()["argv"].arr()
+                    if(argv.size==4) {
+                        fileReads++
+                        val id=argv.last().str().substringAfterLast('/').substringBefore('.')
+                        val text="""{"type":"event_msg","payload":{"type":"user_message","message":"prompt $id"}}
+                            |{"type":"event_msg","payload":{"type":"agent_message","message":"ok"}}
+                            |{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"ok"}}
+                            |""".trimMargin()
+                        val data=Base64.getEncoder().encodeToString(text.toByteArray())
+                        peer.respond(request,"""{"code":0,"stdout":"$data","stderr":"","truncated":false,"timed_out":false}""")
+                    } else {
+                        val info=buildJsonObject {
+                            put("process_key",process); put("process_started_ms",1000)
+                            put("stored",buildJsonArray { for((id,created) in rows) add(buildJsonObject {
+                                put("session_id",id); put("path","/fixture/$id.jsonl"); put("created_ms",created); put("same_cwd",true)
+                            }) })
+                        }
+                        val data=Base64.getEncoder().encodeToString(info.toString().toByteArray())
+                        peer.respond(request,"""{"code":0,"stdout":"$data","stderr":"","truncated":false,"timed_out":false}""")
                     }
-                    val data=Base64.getEncoder().encodeToString(info.toString().toByteArray())
-                    peer.respond(request,"""{"code":0,"stdout":"$data","stderr":"","truncated":false,"timed_out":false}"""); true
+                    true
                 }
                 "file.read" -> {
                     fileReads++
@@ -95,10 +147,12 @@ class CodexResolverTest {
             peers=listOf(terminal.copy(address="t2",created_ms=500,state="finished",finished_ms=3000))
             assertNull(resolver.resolve(terminal).binding,"A now-finished peer was present when the thread began")
             peers=listOf(terminal.copy(address="remote/t2",created_ms=500))
+            val beforeFresh=fileReads
             assertEquals("a",resolver.resolve(terminal).binding?.sessionId)
+            assertEquals(beforeFresh,fileReads,"Unique new-thread evidence precedes screen candidate reads")
             val reads=fileReads
             peers=listOf(terminal.copy(address="t2",created_ms=500))
-            assertEquals("a",resolver.resolve(terminal).binding?.sessionId,"Retain despite screen disappearing and later peer observation")
+            assertEquals("a",SessionResolver(client).resolve(terminal).binding?.sessionId,"Retain across resolver instances despite screen disappearing and later peer observation")
             assertEquals(reads,fileReads,"Retained binding avoids rereading candidate bodies")
             rows=listOf("b" to 3000L,"a" to 2000L)
             assertNull(resolver.resolve(terminal).binding,"A new thread invalidates retention; two fresh threads cannot select newest by cwd alone")

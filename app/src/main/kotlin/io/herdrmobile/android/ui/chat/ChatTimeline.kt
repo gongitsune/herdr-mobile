@@ -22,6 +22,10 @@ fun ChatTimeline(items: List<ChatItem>, blocked: Boolean,
     pendingMessages: List<ChatItem.UserMessage> = emptyList()) {
     val scroll = rememberLazyListState()
     val entries = remember(items, running, blocked) { projectTurns(items, running || blocked) }
+    if (loading && entries.isEmpty() && pendingMessages.isEmpty()) {
+        Box(modifier, contentAlignment = androidx.compose.ui.Alignment.Center) { ConversationLoading() }
+        return
+    }
     val following by remember { derivedStateOf { val info = scroll.layoutInfo; (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 2 } }
     LaunchedEffect(items.lastOrNull(), pendingMessages.lastOrNull()) {
         val count = entries.size + pendingMessages.size
@@ -40,6 +44,17 @@ fun ChatTimeline(items: List<ChatItem>, blocked: Boolean,
             }
         } }
         items(pendingMessages, key = { it.id }) { UserBubble(it.text, pending = true) }
+        if (loading) item { ConversationLoading() }
+    }
+}
+
+@Composable
+private fun ConversationLoading() {
+    Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+        Text(stringResource(R.string.chat_loading), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

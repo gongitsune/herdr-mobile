@@ -4,6 +4,7 @@ import android.os.Looper
 import androidx.annotation.MainThread
 import io.herdrmobile.android.HostsRepository
 import io.herdrmobile.android.SavedHost
+import io.herdrmobile.android.ui.terminal.DetailPresentation
 import io.herdrmobile.core.*
 import io.herdrmobile.core.usage.ClaudeAccountStore
 import io.herdrmobile.core.usage.AgentCommandStore
@@ -26,7 +27,9 @@ data class TrustRequest(val host: SavedHost, val fingerprint: String, val answer
 class HostConnections(private val repository: HostsRepository, parentScope: CoroutineScope) {
     private val scope = CoroutineScope(parentScope.coroutineContext + Dispatchers.Main.immediate)
     private fun checkMain() = check(Looper.myLooper() == Looper.getMainLooper()) { "HostConnections entries require Main" }
-    private class Entry(var host: SavedHost, val scope: CoroutineScope, val client: HcClient, val store: TerminalStore, val workspace: WorkspaceStore, val account: ClaudeAccountStore, val commands: AgentCommandStore)
+    private class Entry(var host: SavedHost, val scope: CoroutineScope, val client: HcClient, val store: TerminalStore, val workspace: WorkspaceStore, val account: ClaudeAccountStore, val commands: AgentCommandStore) {
+        val presentations = mutableMapOf<String, DetailPresentation>()
+    }
     private val entries = mutableMapOf<String, Entry>()
     private val mutableStatuses = MutableStateFlow<List<HostStatus>>(emptyList())
     val statuses = mutableStatuses.asStateFlow()
@@ -107,6 +110,14 @@ class HostConnections(private val repository: HostsRepository, parentScope: Coro
     fun account(id: String): ClaudeAccountStore? { checkMain(); return entries[id]?.account }
     fun commands(id: String): AgentCommandStore? { checkMain(); return entries[id]?.commands }
     fun client(id: String): HcClient? { checkMain(); return entries[id]?.client }
+    fun presentation(hostId: String, terminalId: String, client: HcClient?): DetailPresentation? {
+        checkMain()
+        return entries[hostId]?.takeIf { it.client === client }?.presentations?.get(terminalId)
+    }
+    fun rememberPresentation(hostId: String, terminalId: String, client: HcClient?, presentation: DetailPresentation) {
+        checkMain()
+        if (presentation.known) entries[hostId]?.takeIf { it.client === client }?.presentations?.set(terminalId, presentation)
+    }
     fun answerTrust(request: TrustRequest, accept: Boolean) {
         if (mutableTrust.value === request) request.answer.complete(accept)
     }

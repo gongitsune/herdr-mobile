@@ -18,15 +18,15 @@ import io.herdrmobile.android.ui.theme.LocalHerdrDark
 
 /** Retained underneath Chat: surface selection never owns the attach lifetime. */
 @Composable
-fun TerminalViewport(vm: TerminalViewModel, modifier: Modifier = Modifier, visible: Boolean = true, retry: Int = 0) {
+fun TerminalViewport(vm: TerminalViewModel, modifier: Modifier = Modifier, visible: Boolean = true, retry: Int = 0, interactive: Boolean = visible) {
     val observe by vm.observe.collectAsStateWithLifecycle()
     var view by remember { mutableStateOf<TerminalView?>(null) }
     val dark = LocalHerdrDark.current
     key(observe, retry) {
         AndroidView(factory = { context -> TerminalView(context, null).also { view = it } }, update = {
             it.visibility = if (visible) View.VISIBLE else View.INVISIBLE
-            it.isFocusable = visible; it.isFocusableInTouchMode = visible
-            if (!visible) it.clearFocus()
+            it.isFocusable = interactive; it.isFocusableInTouchMode = interactive
+            if (!interactive) it.clearFocus()
         }, modifier = modifier)
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle

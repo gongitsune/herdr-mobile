@@ -23,7 +23,7 @@ def codex_thread_query(db):
     if 'source' in cols:
         where.append("source IN ('cli', 'vscode')")
     created = 'COALESCE(created_at_ms, created_at*1000)' if 'created_at_ms' in cols else 'created_at*1000'
-    return 'SELECT id, rollout_path, cwd, ' + created + ' AS created_ms FROM threads WHERE ' + ' AND '.join(where)
+    return 'SELECT id, rollout_path, cwd, updated_at, ' + created + ' AS created_ms FROM threads WHERE ' + ' AND '.join(where)
 
 def codex_has_no_new_threads(root, cwd, started_ms):
     stores = codex_stores(root)
@@ -81,7 +81,7 @@ def codex_candidates(root, cwd, title=''):
                     continue
             except (OSError, ValueError):
                 continue
-            result.append({'session_id': row['id'], 'path': path, 'created_ms': row['created_ms'],
+            result.append({'session_id': row['id'], 'path': path, 'created_ms': row['created_ms'], 'updated_at': row['updated_at'],
                            'same_cwd': os.path.realpath(row['cwd']) == os.path.realpath(cwd)})
         return result
     finally:

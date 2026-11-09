@@ -81,6 +81,7 @@
     <string name="expand">Expand</string>
     <string name="collapse">Collapse</string>
     <string name="transcript_unavailable">No conversation log found</string>
+    <string name="chat_loading">Loading conversation…</string>
     <string name="confirm_transcript">Confirm conversation</string>
     <string name="confirm_transcript_help">Read the preview and confirm this is the conversation for this agent.</string>
     <string name="use_transcript">Use this conversation</string>

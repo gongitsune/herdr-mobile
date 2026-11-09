@@ -1,6 +1,5 @@
 package io.herdrmobile.android.ui.chat
 
-import io.herdrmobile.android.ui.terminal.DetailSurface
 import io.herdrmobile.core.model.Terminal
 import io.herdrmobile.core.transcript.*
 import io.herdrmobile.core.workspace.AgentDetector
@@ -9,14 +8,6 @@ import io.herdrmobile.core.workspace.AgentKind
 fun supportsChat(kind: AgentKind?): Boolean = kind == AgentKind.CLAUDE_CODE || kind == AgentKind.CODEX
 
 fun chatAgentKind(terminal: Terminal?): AgentKind? = terminal?.let { AgentDetector.detect(it)?.kind }?.takeIf(::supportsChat)
-
-fun detailSurface(selected: DetailSurface?, kind: AgentKind?, state: TranscriptState?): DetailSurface {
-    if (!supportsChat(kind)) return DetailSurface.TERMINAL
-    return selected ?: when (state) {
-        is TranscriptState.Unavailable, is TranscriptState.Failed -> DetailSurface.TERMINAL
-        else -> DetailSurface.CHAT
-    }
-}
 
 fun canChooseOption(items: List<ChatItem>, question: ChatItem.Question, option: ChatOption, blocked: Boolean, interactive: Boolean, verifiedTranscript: Boolean): Boolean =
     blocked && interactive && verifiedTranscript && option.keys.isNotEmpty() &&

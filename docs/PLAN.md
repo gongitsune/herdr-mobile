@@ -864,6 +864,28 @@ class AgentCommandStore(client: HcClient, scope: CoroutineScope) : java.io.Close
 3. `assets/third_party_notices.txt` に Ovis（MIT、devswha/ovis）の著作権表示とライセンス本文を追記し、ロゴの商標は各社に帰属する旨を 1 行。
 4. ライト／ダーク両方で確認できるよう、Compose の @Preview を 1 つ置く（任意）。ビルド・テスト・lint を通す。
 
+## Phase 13: チャットが出るまでの待ちとチラつきをなくす（ユーザー指摘 2026-11-09）
+
+### 背景（Claude 調査）
+- 「Codex はチャットに切り替わるまで時間がかかり、その間ターミナルが出る」「タブを切り替えるとターミナルとチャットがチラつく」。
+- 原因：
+  1. `SessionResolver`（と Phase 9b の binding 保持 `retained`）は `TranscriptSource` ごとに作られる。タブを切り替えると ViewModel が破棄される（Phase 7）ので、開くたびに Codex の判定（候補 rollout 最大 32 件の末尾読み＋画面照合）をやり直す。
+  2. 開いた直後、接続が無い間に `Unavailable("Terminal is not connected")` を出す。app はそれでターミナルを選び、`Ready` でチャットに戻す。
+  3. app は record（端末情報）が来るまで種別が null → 「エージェントでない」扱いでターミナルを出し、来たらチャットに変える。
+
+### codex-a（core-client）
+1. **接続ごとの binding キャッシュ**：binding（と Phase 9b の保持情報）を `TranscriptSource` ではなく HcClient（接続）単位で共有する（例：internal な `TranscriptCache`。HcClient をキーにした WeakHashMap か、TranscriptSource の任意引数）。キーは端末 ID ＋ processKey。同じ processKey で開き直したら判定をやり直さず即 `Ready`（裏で通常どおり検証し、`/new` などで変われば更新）。
+2. **投影結果のキャッシュ**：binding ごとに直近の items / activity / session と読み終えた位置を最大 16 件（LRU）保持し、開き直したら即座に発行してから追記分だけ読む。
+3. **途中の Unavailable を出さない**：初回の判定が終わるまで（接続待ち・record 待ちを含む）は `Loading` のまま。`Unavailable` は判定が最後まで終わって決まらなかったときだけ。いったん `Ready` になった後の一時的な切断では `Ready` を保つ（再接続後に再検証）。
+4. **Codex の判定を速く**：安い判定（open-fd、新しいスレッド）を先に。画面照合の候補 rollout は updated_at の新しい順に 8 件をまず並列（同時 4）で読み、決まらなければ残りを読む。照合用の末尾読みは最大 256 KiB。
+5. テスト：開き直しで resolver を呼ばないこと、初回判定中は Loading のままであること、キャッシュの LRU、Codex の段階的な候補読み。
+
+### codex-b（app）
+1. **record が来るまでターミナルを出さない**：開いた直後で種別が未確定の間は、ターミナルもチャットも出さず背景＋小さな読み込み表示。端末ごとの「最後に分かった種別」と「最後に表示した面（チャット／ターミナル）」を接続単位（HostConnections）で覚え、開き直したときはそれで即座に描く。
+2. **Loading 中はチャット面にアニメーション**：対応エージェントで `Loading` の間はチャット面を出し、会話の場所に読み込みアニメーション（メッセージ形のスケルトンを薄く明滅させる、または中央に小さな進捗＋「会話を読み込み中…」）。入力欄は使える。ターミナルには切り替えない。
+3. **自動の面切り替えは一度だけ**：自動で面を変えるのは「Loading → Ready/NotStarted（チャット）」か「Loading → Unavailable/Failed（ターミナル）」のときだけ。ユーザーが選んだ面は、その端末を開いている間は自動で変えない。面の切り替えは 150ms 程度のクロスフェード。
+4. 単体テスト（種別未確定・Loading・キャッシュ済みの面での表示決定）。
+
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。
 - codex-b: それ以外すべて（ルート Gradle 設定、`gradle/libs.versions.toml`、`app/**`、`third_party/**`）。

@@ -22,6 +22,7 @@ class CoreConnection(private val transport: ByteTransport, private val scope: Co
     private val writer = Mutex()
     private var reader: Job? = null
     private val ended = java.util.concurrent.atomic.AtomicBoolean()
+    internal val isClosed: Boolean get() = ended.get()
     @Volatile private var endError: Exception? = null
     val completion = CompletableDeferred<Unit>()
     lateinit var hello: JsonObject

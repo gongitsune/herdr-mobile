@@ -1,10 +1,8 @@
 package io.herdrmobile.android.ui.chat
 
-import io.herdrmobile.android.ui.terminal.DetailSurface
 import io.herdrmobile.core.model.Foreground
 import io.herdrmobile.core.model.Status
 import io.herdrmobile.core.model.Terminal
-import io.herdrmobile.core.rpc.HcError
 import io.herdrmobile.core.transcript.*
 import io.herdrmobile.core.workspace.AgentKind
 import org.junit.Assert.*
@@ -13,29 +11,10 @@ import org.junit.Test
 class ChatPresentationTest {
     private val option = ChatOption("Allow", keys = listOf("Enter"))
     private val question = ChatItem.Question("approval", "Allow?", listOf(option), approval = true)
-    private val binding = TranscriptBinding(AgentKind.CODEX, "session", "/log", "process")
-    private val states = listOf(null, TranscriptState.Loading, TranscriptState.NotStarted(AgentKind.CODEX),
-        TranscriptState.NotStarted(AgentKind.CLAUDE_CODE), TranscriptState.Ready(binding, true), TranscriptState.Ready(binding, false),
-        TranscriptState.Unavailable("No log"), TranscriptState.Failed(HcError("io", "Read failed")))
-
-    @Test fun onlyClaudeAndCodexHaveSurfaceSegmentsAndDefaultToChatWithoutRequiringItems() {
+    @Test fun onlyClaudeAndCodexHaveSurfaceSegments() {
         (AgentKind.entries + listOf(null)).forEach { kind ->
             val supported = kind == AgentKind.CLAUDE_CODE || kind == AgentKind.CODEX
             assertEquals("segments for $kind", supported, supportsChat(kind))
-            states.forEach { state ->
-                val expected = if (supported && state !is TranscriptState.Unavailable && state !is TranscriptState.Failed)
-                    DetailSurface.CHAT else DetailSurface.TERMINAL
-                assertEquals("$kind / $state", expected, detailSurface(null, kind, state))
-            }
-        }
-    }
-    @Test fun explicitSurfaceSelectionIsRetainedOnlyForSupportedAgents() {
-        (AgentKind.entries + listOf(null)).forEach { kind ->
-            states.forEach { state ->
-                assertEquals(DetailSurface.TERMINAL, detailSurface(DetailSurface.TERMINAL, kind, state))
-                assertEquals(if (supportsChat(kind)) DetailSurface.CHAT else DetailSurface.TERMINAL,
-                    detailSurface(DetailSurface.CHAT, kind, state))
-            }
         }
     }
     @Test fun transcriptEligibilityFollowsForegroundIncludingAgentExitToShell() {

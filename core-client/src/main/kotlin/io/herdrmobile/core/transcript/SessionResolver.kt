@@ -6,13 +6,18 @@ import io.herdrmobile.core.model.*
 import io.herdrmobile.core.rpc.HcError
 import io.herdrmobile.core.workspace.*
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.*
 
 internal data class SessionEvidence(val processKey:String,val binding:TranscriptBinding?,val candidates:List<TranscriptCandidate>,val reason:String,
                                     val notStarted:AgentKind?=null)
 internal class SessionResolver(private val client:HcClient) {
     private val storeScript=checkNotNull(javaClass.getResourceAsStream("/io/herdrmobile/core/transcript/codex_store.py")).bufferedReader().use { it.readText() }
-    private val retained=mutableMapOf<String,Pair<TranscriptBinding,Long>>()
+    private val cache=client.transcriptCache
     private val script=storeScript+"\n"+checkNotNull(javaClass.getResourceAsStream("/io/herdrmobile/core/transcript/discover.py")).bufferedReader().use { it.readText() }
     suspend fun resolve(terminal:Terminal,listCandidates:Boolean=false):SessionEvidence {
         val agent=AgentDetector.detect(terminal)
@@ -62,38 +67,15 @@ internal class SessionResolver(private val client:HcClient) {
             }
         }
         val stored=info["stored"].arr().map { it.obj() }
+            .sortedByDescending { it["updated_at"]?.jsonPrimitive?.longOrNull ?: 0L }
         if(kind==AgentKind.CODEX && binding==null) {
             val newest=stored.filter { it["same_cwd"]?.jsonPrimitive?.booleanOrNull==true }.maxOfOrNull { it["created_ms"]?.jsonPrimitive?.longOrNull ?: 0L } ?: 0L
-            val previous=retained[terminal.id]
+            val previous=cache.retained(terminal.id,process)
             if(previous!=null && previous.first.processKey==process && newest<=previous.second) binding=previous.first
             if(binding==null) {
-                val transcripts=mutableListOf<CodexScreenTranscript>()
-                for(row in stored) {
-                    val path=row.text("path")
-                    try {
-                        val first=client.readChunk(path,limit=1,on=machine)
-                        var offset=maxOf(1L,first.lines-1999)
-                        var chunk=client.readChunk(path,offset=offset,limit=2000,on=machine)
-                        // file.read is paginated by lines; walk toward EOF, retaining only a bounded tail.
-                        var tail=""
-                        while(true) {
-                            tail=(tail+chunk.text).takeLast(1024*1024)
-                            if(chunk.last>=chunk.lines) break
-                            offset=chunk.last+1
-                            chunk=client.readChunk(path,offset=offset,limit=2000,on=machine)
-                        }
-                        val raw=tail.toByteArray()
-                        val bounded=if(raw.size>1024*1024) raw.copyOfRange(raw.size-1024*1024,raw.size).decodeToString().substringAfter('\n', "") else tail
-                        transcripts+=codexScreenTranscript(path,bounded.lineSequence().toList())
-                    } catch(e:CancellationException) { throw e } catch(_:HcError) { }
-                }
-                // An unread competitor may own the displayed answer; never match an incomplete inventory.
-                val screenPath=if(stored.isNotEmpty() && transcripts.size==stored.size) {
-                    screen=client.read(terminal.id)
-                    matchCodexScreen(checkNotNull(screen),transcripts)
-                } else null
-                var chosen=stored.singleOrNull { it.text("path")==screenPath }
-                if(chosen==null) {
+                // A unique new thread with no possible peer owner needs no conversation reads.
+                var chosen:JsonObject?=null
+                run {
                     val started=info["process_started_ms"]?.jsonPrimitive?.longOrNull
                     val fresh=if(started==null) emptyList() else stored.filter { it["same_cwd"]?.jsonPrimitive?.booleanOrNull==true && (it["created_ms"]?.jsonPrimitive?.longOrNull ?: 0)>=started }
                     val only=fresh.singleOrNull()
@@ -109,10 +91,21 @@ internal class SessionResolver(private val client:HcClient) {
                         if(created==newest && peers.none { it.created_ms<=0 || it.created_ms<=created+999 }) chosen=only
                     }
                 }
+                if(chosen==null && stored.isNotEmpty()) {
+                    screen=client.read(terminal.id)
+                    val screenPath=stagedCodexScreenMatch(checkNotNull(screen),stored) { row ->
+                        val path=row.text("path")
+                        try {
+                            val tail=client.execRead(listOf("python3","-c",CODEX_TAIL_SCRIPT,path),on=machine)
+                            if(tail.code!=0 || tail.timedOut || tail.truncated || tail.stdout.size>CODEX_TAIL_BYTES) null
+                            else codexScreenTranscript(path,tail.stdout.decodeToString().lineSequence().toList())
+                        } catch(e:CancellationException) { throw e } catch(_:HcError) { null }
+                    }
+                    chosen=stored.singleOrNull { it.text("path")==screenPath }
+                }
                 chosen?.let { binding=TranscriptBinding(kind,it.text("session_id"),it.text("path"),process,machine) }
             }
-            binding?.let { retained[terminal.id]=it to newest }
-            if(binding==null) retained.remove(terminal.id)
+            cache.retain(terminal.id,process,binding?.let { it to newest })
             if(binding==null && info.flag("no_new_threads") && info["process_started_ms"]?.jsonPrimitive?.longOrNull!=null &&
                 info["open_files"].arr().isEmpty() && info["lock_ids"].arr().isEmpty() &&
                 stored.none { it.flag("same_cwd") && (it["created_ms"]?.jsonPrimitive?.longOrNull ?: Long.MAX_VALUE)>=
@@ -130,6 +123,32 @@ internal class SessionResolver(private val client:HcClient) {
         }
         return SessionEvidence(process,binding,candidates,info.text("reason").ifBlank { "Cannot determine a unique session" },notStarted)
     }
+}
+
+internal const val CODEX_TAIL_BYTES=256*1024
+internal val CODEX_TAIL_SCRIPT="""
+    import os, sys
+    with open(sys.argv[1], 'rb') as f:
+        size = f.seek(0, os.SEEK_END)
+        start = max(0, size - $CODEX_TAIL_BYTES)
+        f.seek(start)
+        data = f.read($CODEX_TAIL_BYTES)
+    if start:
+        data = data.partition(b'\n')[2]
+    sys.stdout.buffer.write(data)
+""".trimIndent()
+
+/** Inspect recent candidates first; never infer ownership from an unreadable candidate in a stage. */
+internal suspend fun stagedCodexScreenMatch(screen:String,stored:List<JsonObject>,
+    read:suspend (JsonObject)->CodexScreenTranscript?):String? = coroutineScope {
+    val permits=Semaphore(4)
+    suspend fun load(rows:List<JsonObject>)=rows.map { row -> async { permits.withPermit { read(row) } } }.awaitAll()
+    val recent=load(stored.take(8))
+    val first=if(recent.all { it!=null }) matchCodexScreen(screen,recent.filterNotNull()) else null
+    if(first!=null) return@coroutineScope first
+    val rest=load(stored.drop(8))
+    val all=recent+rest
+    if(all.any { it==null }) null else matchCodexScreen(screen,all.filterNotNull())
 }
 
 internal fun codexRoot(p:JsonObject):Boolean = p.text("parent_thread_id").isEmpty() && p.text("agent_role").isEmpty() &&

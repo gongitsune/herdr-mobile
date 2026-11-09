@@ -4,6 +4,7 @@ import io.herdrmobile.core.model.*
 import io.herdrmobile.core.files.*
 import io.herdrmobile.core.rpc.*
 import io.herdrmobile.core.wire.*
+import io.herdrmobile.core.transcript.TranscriptCache
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
@@ -35,6 +36,7 @@ class HcClient internal constructor(
     // Identity, not Connected's core/features equality: a fast reconnect can conflate state changes.
     internal val connections: StateFlow<CoreConnection?> = live.asStateFlow()
     internal val connection: CoreConnection? get() = live.value
+    internal val transcriptCache = TranscriptCache()
     private var opening: CoreConnection? = null
     private var generation = 0L
     private var wanted = false

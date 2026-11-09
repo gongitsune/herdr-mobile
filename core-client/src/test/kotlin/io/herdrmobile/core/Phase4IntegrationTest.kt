@@ -70,7 +70,8 @@ class Phase4IntegrationTest {
                 val chat=source!!.items.first { it.any { row -> row is ChatItem.AssistantText } }
                 assertEquals("Synthetic integration answer",chat.filterIsInstance<ChatItem.AssistantText>().single().markdown)
                 assertEquals("Synthetic integration prompt",chat.filterIsInstance<ChatItem.UserMessage>().single().text)
-                assertFalse((source!!.state.value as TranscriptState.Ready).binding.confirmed)
+                val ready=source!!.state.first { it is TranscriptState.Ready } as TranscriptState.Ready
+                assertFalse(ready.binding.confirmed)
                 val changes=client.changes(directory.toString())
                 assertTrue(changes.entries.any { it.path=="tracked space.txt" })
                 assertContains(changes.diff,"+after fixture")

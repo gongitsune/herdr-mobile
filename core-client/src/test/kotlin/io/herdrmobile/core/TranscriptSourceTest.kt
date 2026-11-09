@@ -19,6 +19,97 @@ import kotlin.test.*
 class TranscriptSourceTest {
     private val user="""{"type":"user","uuid":"u","parentUuid":null,"sessionId":"fixture-session","message":{"content":"Synthetic prompt"}}"""
     private val answer="""{"type":"assistant","uuid":"a","parentUuid":"u","sessionId":"fixture-session","message":{"id":"m","content":[{"type":"text","text":"Synthetic answer"}]}}"""
+    @Test fun reopeningPublishesCachedProjectionBeforeAnyProbeAndReadsOnlyTheAppend():Unit=runBlocking {
+        for(kind in listOf(AgentKind.CLAUDE_CODE,AgentKind.CODEX)) withTimeout(6000) {
+            val metadata=if(kind==AgentKind.CLAUDE_CODE)
+                answer.replace("\"id\":\"m\",","\"id\":\"m\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":90000},")
+            else """{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}"""
+            val peer=TranscriptPeer((initialRows(kind)+metadata).joinToString("\n",postfix="\n"),kind,"working")
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+            var source=TranscriptSource(client,"t1",scope)
+            try {
+                client.connect()
+                source.state.first { it is TranscriptState.Ready }
+                // Give the reader a substantial checkpoint, then reopen with additional bytes on disk.
+                peer.text.updateAndGet { it+"{}\n".repeat(2100) }
+                source.refresh()
+                val items=source.items.value
+                val activity=source.activity.value
+                val session=source.session.value
+                assertNotNull(session)
+                val probes=peer.probes.get()
+                source.close()
+                peer.offsets.clear()
+                peer.text.updateAndGet { it+liveRows(kind).first()+"\n" }
+                source=TranscriptSource(client,"t1",scope)
+                assertIs<TranscriptState.Ready>(source.state.value)
+                assertSame(items,source.items.value)
+                assertEquals(activity,source.activity.value)
+                assertEquals(session,source.session.value)
+                assertEquals(probes,peer.probes.get())
+                withTimeout(750) { source.items.first { it.any { row -> row is ChatItem.Thinking } } }
+                assertEquals(probes,peer.probes.get(),"Reopening must not rerun the resolver before publishing/reading the cache")
+                assertTrue(peer.offsets.isNotEmpty())
+                assertTrue(peer.offsets.all { it>2000 },"Restore the reader checkpoint, not just displayed rows")
+                source.refresh()
+                assertTrue(peer.probes.get()>probes,"Normal validation still runs after a cached reopen")
+                peer.notStarted=true
+                source.refresh()
+                assertIs<TranscriptState.NotStarted>(source.state.value)
+                source.close()
+                source=TranscriptSource(client,"t1",scope)
+                assertIs<TranscriptState.Loading>(source.state.value,"/new must invalidate the previous projection")
+            } finally { source.close(); client.close(); scope.cancel() }
+        }
+    }
+
+    @Test fun initialConnectionAndResolverWaitStayLoadingAndDisconnectKeepsReady():Unit=runBlocking {
+        withTimeout(6000) {
+            val peer=TranscriptPeer(user+"\n").apply { holdProbes=true }
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+            val source=TranscriptSource(client,"t1",scope)
+            try {
+                delay(30)
+                assertIs<TranscriptState.Loading>(source.state.value)
+                client.connect()
+                while(peer.pendingProbes.isEmpty()) delay(1)
+                assertIs<TranscriptState.Loading>(source.state.value)
+                peer.holdProbes=false
+                peer.pendingProbes.forEach(peer::respondProbe)
+                source.state.first { it is TranscriptState.Ready }
+                val rows=source.items.value
+                val state=source.state.value
+                client.close()
+                delay(50)
+                assertEquals(state,source.state.value)
+                assertSame(rows,source.items.value)
+            } finally { source.close(); client.close(); scope.cancel() }
+        }
+    }
+
+    @Test fun disconnectDuringResolutionKeepsLoadingOrReady():Unit=runBlocking {
+        for(initial in listOf(true,false)) withTimeout(5000) {
+            val peer=TranscriptPeer(user+"\n").apply { holdProbes=initial }
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+            val source=TranscriptSource(client,"t1",scope)
+            try {
+                client.connect()
+                if(!initial) source.state.first { it is TranscriptState.Ready }
+                val expected=source.state.value
+                peer.holdProbes=true
+                val refresh=if(!initial) async { source.refresh() } else null
+                while(peer.pendingProbes.isEmpty()) delay(1)
+                peer.peer.close()
+                refresh?.await()
+                client.state.first { it is ConnectionState.Failed }
+                delay(30)
+                assertEquals(expected,source.state.value)
+            } finally { source.close(); client.close(); scope.cancel() }
+        }
+    }
     @Test fun notStartedReevaluatesOnPollingNudgeAndStatusAndClearsPreviousConversation():Unit=runBlocking {
         for(kind in listOf(AgentKind.CLAUDE_CODE,AgentKind.CODEX)) {
             for(trigger in listOf("poll","nudge","status","turn","partial")) withTimeout(6000) {
@@ -86,7 +177,7 @@ class TranscriptSourceTest {
             val peer=TranscriptPeer(user+"\n").apply { exact=false }
             val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
             val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
-            val source=TranscriptSource(client,"t1",scope,20)
+            var source=TranscriptSource(client,"t1",scope,20)
             try {
                 client.connect()
                 source.state.first { it is TranscriptState.Unavailable && it.reason=="Ambiguous fixture" }
@@ -101,6 +192,13 @@ class TranscriptSourceTest {
                 source.select(candidates.single())
                 val ready=source.state.first { it is TranscriptState.Ready } as TranscriptState.Ready
                 assertTrue(ready.binding.confirmed)
+                source.close()
+                val reads=peer.offsets.size
+                source=TranscriptSource(client,"t1",scope)
+                assertEquals(ready,source.state.value,"A confirmed manual selection survives reopening")
+                while(peer.offsets.size==reads) delay(1) // The new source has received its terminal snapshot.
+                source.refresh()
+                assertEquals(ready,source.state.value)
                 // A different process invalidates the manual choice and removes its rows.
                 peer.process.set("t1:1:124:2")
                 source.refresh()
@@ -276,10 +374,25 @@ class TranscriptSourceTest {
         val process=AtomicReference("t1:1:123:2")
         val offsets=ConcurrentLinkedQueue<Long>()
         val probes=AtomicInteger()
+        @Volatile var holdProbes=false
+        val pendingProbes=ConcurrentLinkedQueue<JsonObject>()
         private val seq=AtomicInteger()
         val status=AtomicReference(initialStatus)
         @Volatile var exact=true
         @Volatile var notStarted=false
+        fun respondProbe(r:JsonObject) {
+            val evidence=buildJsonObject {
+                put("process_key",process.get()); put("reason","Ambiguous fixture")
+                put("not_started",notStarted && kind==AgentKind.CLAUDE_CODE)
+                put("no_new_threads",notStarted && kind==AgentKind.CODEX)
+                put("process_started_ms",1000)
+                if(exact && !notStarted && kind==AgentKind.CODEX) put("open_files",buildJsonArray { add("/fixture/session.jsonl") })
+                if(exact && !notStarted) put("binding",buildJsonObject { put("session_id","fixture-session"); put("path","/fixture/session.jsonl") })
+                put("candidates",buildJsonArray { add(buildJsonObject { put("session_id","fixture-session"); put("path","/fixture/session.jsonl") }) })
+            }
+            val encoded=Base64.getEncoder().encodeToString(evidence.toString().toByteArray())
+            peer.respond(r,"""{"code":0,"stdout":"$encoded","stderr":"","truncated":false,"timed_out":false,"ms":1}""")
+        }
         fun turnEvent() {
             peer.send(Frame(2,0,(buildJsonObject {
                 put("method","event"); put("params",buildJsonObject {
@@ -315,17 +428,8 @@ class TranscriptSourceTest {
                 }
                 "machine.exec" -> {
                     probes.incrementAndGet()
-                    val evidence=buildJsonObject {
-                        put("process_key",process.get()); put("reason","Ambiguous fixture")
-                        put("not_started",notStarted && kind==AgentKind.CLAUDE_CODE)
-                        put("no_new_threads",notStarted && kind==AgentKind.CODEX)
-                        put("process_started_ms",1000)
-                        if(exact && !notStarted && kind==AgentKind.CODEX) put("open_files",buildJsonArray { add("/fixture/session.jsonl") })
-                        if(exact && !notStarted) put("binding",buildJsonObject { put("session_id","fixture-session"); put("path","/fixture/session.jsonl") })
-                        put("candidates",buildJsonArray { add(buildJsonObject { put("session_id","fixture-session"); put("path","/fixture/session.jsonl") }) })
-                    }
-                    val encoded=Base64.getEncoder().encodeToString(evidence.toString().toByteArray())
-                    peer.respond(r,"""{"code":0,"stdout":"$encoded","stderr":"","truncated":false,"timed_out":false,"ms":1}"""); true
+                    if(holdProbes) pendingProbes.add(r) else respondProbe(r)
+                    true
                 }
                 "terminal.read" -> { peer.respond(r,"""{"text":"OpenAI Codex (v0.fixture)\n› Ask Codex to do anything"}"""); true }
                 "file.read" -> {

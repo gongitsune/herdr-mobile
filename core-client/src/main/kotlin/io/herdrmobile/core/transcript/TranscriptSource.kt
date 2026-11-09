@@ -24,6 +24,7 @@ class TranscriptSource(
     private val owned=CoroutineScope(scope.coroutineContext+SupervisorJob(scope.coroutineContext[Job]))
     private val store=TerminalStore(client,owned)
     private val resolver=SessionResolver(client)
+    private val cache=client.transcriptCache
     private val lock=Mutex()
     private val mutableState=MutableStateFlow<TranscriptState>(TranscriptState.Loading)
     val state:StateFlow<TranscriptState> = mutableState.asStateFlow()
@@ -40,6 +41,8 @@ class TranscriptSource(
     private var revision=0L
     private var projectedBlocked:Boolean?=null
     private var projectedActivity:TurnActivity?=null
+    private var cachedLines:List<String> = emptyList()
+    private var cachedRevision=-1L
     private var lastTail:Pair<Int,Int>?=null
     private var historyBytes=0L
     private var binding:TranscriptBinding?=null
@@ -49,7 +52,8 @@ class TranscriptSource(
     private var nextLine=1L
     private var checkpoint:String?=null
     private var bytes=0L
-    private var resetOnReconnect=false
+    private var cachedProcess:TranscriptProcess?=null
+    private var needsVerification=false
     private var canFollow=false
     private var waitingForConversation=false
     private var historyPrefix:List<String> = emptyList()
@@ -57,24 +61,26 @@ class TranscriptSource(
     private var historyLoaded=false
     init {
         require(pollIntervalMs>0)
+        cache.latest(terminalId)?.let(::restore)
         owned.launch {
-            var lastConnection: Any?=null
+            var firstRecord=true
             combine(store.snapshotConnection,store.terminals) { connection,terminals -> connection to terminals.find { it.id==terminalId } }
                 .distinctUntilChangedBy { (connection,t) -> listOf(connection,t?.foreground,t?.pid,t?.status,t?.turn,t?.labels,t?.state,t?.reason) }
                 .collectLatest { (connection,terminal) ->
                     polling.changed()
                     wake.trySend(Unit)
                     lock.withLock {
-                        if(connection !== lastConnection) resetOnReconnect=true
-                        lastConnection=connection
                         if(connection==null || terminal==null) {
                             canFollow=false
-                            mutableSession.value=null
-                            mutableActivity.value=null
-                            mutableState.value=TranscriptState.Unavailable("Terminal is not connected")
+                            // Waiting for the first snapshot is not a completed negative resolution.
+                            // A known conversation remains visible throughout a transport interruption.
                         }
                     }
-                    if(connection!=null && terminal!=null) refresh()
+                    if(connection!=null && terminal!=null) {
+                        val useCached=firstRecord && cachedProcess==TranscriptProcess.of(terminal)
+                        firstRecord=false
+                        update(rebind=true,useCachedBinding=useCached)
+                    }
                 }
         }
         owned.launch {
@@ -94,20 +100,31 @@ class TranscriptSource(
         wake.trySend(Unit)
     }
     suspend fun refresh() { update(rebind=true) }
-    private suspend fun update(rebind:Boolean) = withContext(Dispatchers.Default) { lock.withLock {
+    private suspend fun update(rebind:Boolean,useCachedBinding:Boolean=false) = withContext(Dispatchers.Default) { lock.withLock {
         if(!owned.isActive) return@withLock
         val terminal=store.terminals.value.find { it.id==terminalId } ?: return@withLock
+        val connection=store.snapshotConnection.value ?: return@withLock
+        val process=TranscriptProcess.of(terminal)
+        if(cachedProcess!=null && cachedProcess!=process) {
+            cache.invalidate(terminalId)
+            binding=null; selected=null; previewed.clear(); resetReader()
+            mutableItems.value=emptyList(); mutableActivity.value=null
+            mutableState.value=TranscriptState.Loading
+            cachedProcess=null
+        }
         val kind=AgentDetector.detect(terminal)?.kind
         val codex=kind==AgentKind.CODEX
         if(kind !in setOf(AgentKind.CLAUDE_CODE,AgentKind.CODEX)) waitingForConversation=false
-        if(!rebind && !canFollow && !codex && !waitingForConversation) return@withLock
+        if(!rebind && !needsVerification && !canFollow && !codex && !waitingForConversation) return@withLock
         try {
-            if(rebind || codex || waitingForConversation) {
+            if(!useCachedBinding && (rebind || needsVerification || codex || waitingForConversation)) {
                 val evidence=resolver.resolve(terminal)
+                needsVerification=false
                 val chosen=selected?.takeIf { it.processKey==evidence.processKey }
                 if(selected!=null && chosen==null) { selected=null; previewed.clear(); mutableItems.value=emptyList() }
                 val resolved=if(evidence.notStarted!=null) null else evidence.binding ?: chosen
                 if(resolved==null) {
+                    cache.invalidate(terminalId)
                     canFollow=false
                     mutableSession.value=null
                     projectedRevision=-1
@@ -123,10 +140,13 @@ class TranscriptSource(
                 if(evidence.binding!=null && chosen!=null && evidence.binding.path!=chosen.path) selected=null
                 waitingForConversation=false
                 canFollow=true
-                if(resolved.path!=binding?.path || resolved.processKey!=binding?.processKey || resetOnReconnect) {
-                    binding=resolved; resetReader(); mutableItems.value=emptyList(); resetOnReconnect=false
+                if(resolved.path!=binding?.path || resolved.processKey!=binding?.processKey) {
+                    cache.invalidateProjections(terminalId)
+                    binding=resolved; resetReader(); mutableItems.value=emptyList()
                 } else binding=resolved
             }
+            cachedProcess=process
+            canFollow=true
             val current=binding ?: return@withLock
             val caughtUp=readAppend(current)
             if(current.kind==AgentKind.CODEX && !historyLoaded && lines.isNotEmpty()) {
@@ -160,10 +180,32 @@ class TranscriptSource(
                 projectedRevision=revision; projectedBlocked=blocked
             }
             mutableActivity.value=projectedActivity.withTerminal(terminal)
-            mutableState.value=TranscriptState.Ready(current,caughtUp && historyComplete)
+            val ready=TranscriptState.Ready(current,caughtUp && historyComplete)
+            // Save before publishing Ready, so closing/reopening immediately observes a full checkpoint.
+            if(cachedRevision!=revision) { cachedLines=lines.toList(); cachedRevision=revision }
+            cache.put(terminal,CachedTranscript(process,current,ready,mutableItems.value,mutableActivity.value,
+                mutableSession.value,cachedLines,nextLine,checkpoint,bytes,lastTail,historyPrefix,
+                historyComplete,historyLoaded,historyBytes,projectedBlocked,projectedActivity))
+            mutableState.value=ready
         } catch(e:CancellationException) { throw e }
-        catch(e:Exception) { mutableState.value=TranscriptState.Failed(connectionError(e)) }
+        catch(e:Exception) {
+            if(!connection.isClosed && client.connection===connection)
+                mutableState.value=TranscriptState.Failed(connectionError(e))
+        }
     } }
+    private fun restore(value:CachedTranscript) {
+        binding=value.binding
+        selected=value.binding.takeIf { it.confirmed }
+        cachedProcess=value.process; needsVerification=true; canFollow=true
+        mutableItems.value=value.items; mutableActivity.value=value.activity; mutableSession.value=value.session
+        lines.addAll(value.lines); nextLine=value.nextLine; checkpoint=value.checkpoint
+        bytes=value.bytes; lastTail=value.lastTail; historyPrefix=value.historyPrefix
+        historyComplete=value.historyComplete; historyLoaded=value.historyLoaded; historyBytes=value.historyBytes
+        projectedBlocked=value.projectedBlocked; projectedActivity=value.projectedActivity
+        projectedRevision=revision
+        cachedLines=value.lines; cachedRevision=revision
+        mutableState.value=value.ready
+    }
     private fun resetReader() {
         mutableSession.value=null
         nextLine=1; checkpoint=null; bytes=0; lines.clear(); historyPrefix=emptyList()
@@ -173,6 +215,7 @@ class TranscriptSource(
     private fun showNotStarted(kind:AgentKind,terminal:Terminal) {
         // Keep retrying through transient partial writes/ambiguous evidence.
         waitingForConversation=true; canFollow=false
+        cache.invalidate(terminalId)
         selected=null; previewed.clear(); binding=null; resetReader()
         projectedRevision=-1; mutableItems.value=emptyList()
         mutableActivity.value=null.withTerminal(terminal)

@@ -81,6 +81,7 @@
     <string name="expand">展開</string>
     <string name="collapse">折りたたむ</string>
     <string name="transcript_unavailable">会話ログが見つかりません</string>
+    <string name="chat_loading">会話を読み込み中…</string>
     <string name="confirm_transcript">会話の確認</string>
     <string name="confirm_transcript_help">プレビューを読み、このエージェントの会話であることを確認してください。</string>
     <string name="use_transcript">この会話を使用</string>

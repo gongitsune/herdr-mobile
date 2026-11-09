@@ -61,6 +61,7 @@ class StoreTest(unittest.TestCase):
             found = codex_candidates(str(root),str(root/'link'))
             self.assertEqual(['root'],[r['session_id'] for r in found])
             self.assertEqual(10001, found[0]['created_ms'])
+            self.assertEqual(10, found[0]['updated_at'])
             titled = codex_candidates(str(root),str(cwd),'Codex · abcdef01')
             self.assertEqual(['root','abcdef01-1111-2222-3333-444444444444'],[r['session_id'] for r in titled])
             self.assertFalse(titled[1]['same_cwd'])

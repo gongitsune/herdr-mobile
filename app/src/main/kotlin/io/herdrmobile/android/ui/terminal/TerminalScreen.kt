@@ -1,6 +1,9 @@
 package io.herdrmobile.android.ui.terminal
 
 import android.view.KeyEvent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -11,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,15 +46,15 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
     val chatItems by vm.chatItems.collectAsStateWithLifecycle()
     val pendingMessages by vm.pendingMessages.collectAsStateWithLifecycle()
     val transcript by vm.transcriptState.collectAsStateWithLifecycle()
-    val selected by vm.selectedSurface.collectAsStateWithLifecycle()
+    val presentation by vm.presentation.collectAsStateWithLifecycle()
     val blocked by vm.blocked.collectAsStateWithLifecycle()
     LaunchedEffect(vm, connected, record?.foreground, (transcript as? io.herdrmobile.core.transcript.TranscriptState.Ready)?.binding?.machine) {
         while (true) { if (connected) vm.refreshAccount(); kotlinx.coroutines.delay(300_000) }
     }
-    val kind = chatAgentKind(record)
-    val surface = detailSurface(selected, kind, transcript)
-    val unavailable = transcript is TranscriptState.Unavailable || transcript is TranscriptState.Failed
-    val showTerminal = surface == DetailSurface.TERMINAL || unavailable
+    val kind = presentation.kind
+    val surface = presentation.surface
+    val showTerminal = surface == DetailSurface.TERMINAL
+    val terminalAlpha by animateFloatAsState(if (showTerminal) 1f else 0f, tween(150), label = "terminalSurface")
     val working = connected && (record?.status?.state == "working" || activity?.running == true)
     val live = rememberLiveHeader(working, blocked, activity, chatItems, record?.status_ms, connected)
     val question = activeQuestion(chatItems, blocked)
@@ -71,13 +75,13 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
         topBar = {
             Column {
             TopAppBar(title = { if (titleContent != null) titleContent() else Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                io.herdrmobile.android.ui.theme.ProgramAvatar(record?.let { io.herdrmobile.core.workspace.AgentDetector.detect(it)?.kind })
+                io.herdrmobile.android.ui.theme.ProgramAvatar(kind)
                 Spacer(Modifier.width(6.dp))
                 Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
             } }, navigationIcon = { if (showMenu) IconButton(onClick = back) { Icon(Icons.Default.Menu, stringResource(R.string.open_menu)) } },
                 expandedHeight = 56.dp,
                 actions = {
-                    if (supportsChat(kind)) SurfaceSwitch(surface) { vm.selectedSurface.value = it }
+                    if (supportsChat(kind) && surface != null) SurfaceSwitch(surface, vm::selectSurface)
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreHoriz, stringResource(R.string.terminal_menu)) }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -95,7 +99,7 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
         bottomBar = {
             Column(Modifier.imePadding().navigationBarsPadding()) {
                 if (showTerminal) TerminalKeys(vm, ready && !observe)
-                else if (supportsChat(kind)) {
+                else if (surface == DetailSurface.CHAT) {
                     if (modelConfirmation != null) ModelSwitchCard(modelConfirmation!!, ready && !observe && !busy, vm::confirmModelSwitch)
                     else question?.let { QuestionCard(it, ready && !observe && !busy, vm::choose) }
                     TextField(draft, { vm.draft.value = it; vm.choiceError.value = null }, modifier = Modifier.fillMaxWidth().padding(8.dp).heightIn(min = 96.dp), enabled = !observe,
@@ -117,21 +121,32 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
                     TextButton(onClick = { vm.retryConnection(); retry++ }, contentPadding = PaddingValues(horizontal = 10.dp)) { Text(stringResource(R.string.retry), style = MaterialTheme.typography.labelSmall) }
                 }
             }
-            if (surface == DetailSurface.CHAT && unavailable) TranscriptPanel(vm, transcript)
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
-                TerminalViewport(vm, Modifier.fillMaxSize(), visible = showTerminal, retry = retry)
-                if (surface == DetailSurface.CHAT && !unavailable) Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    Column {
-                        TranscriptPanel(vm, transcript)
-                        if (transcript is TranscriptState.NotStarted && chatItems.isEmpty() && pendingMessages.isEmpty()) {
-                            EmptyConversation(kind, record?.foreground?.cwd?.takeIf { it.isNotBlank() } ?: record?.cwd.orEmpty(), Modifier.weight(1f))
-                        } else ChatTimeline(chatItems, blocked, Modifier.weight(1f).fillMaxWidth(),
-                            running = working || live?.working == true, runningElapsed = live?.elapsed, loading = transcript == null || transcript is TranscriptState.Loading,
-                            pendingMessages = pendingMessages.map { it.message })
+                // Keep one AndroidView and attach alive while the visible surfaces crossfade.
+                TerminalViewport(vm, Modifier.fillMaxSize().graphicsLayer { alpha = terminalAlpha },
+                    visible = showTerminal || terminalAlpha > 0f, interactive = showTerminal, retry = retry)
+                Crossfade(surface, Modifier.fillMaxSize(), animationSpec = tween(150), label = "detailSurface") { displayed ->
+                    when (displayed) {
+                        null -> Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                            Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
+                                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                            }
+                        }
+                        DetailSurface.TERMINAL -> Unit
+                        DetailSurface.CHAT -> Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                            Column {
+                                TranscriptPanel(vm, transcript)
+                                if (transcript is TranscriptState.NotStarted && chatItems.isEmpty() && pendingMessages.isEmpty()) {
+                                    EmptyConversation(kind, record?.foreground?.cwd?.takeIf { it.isNotBlank() } ?: record?.cwd.orEmpty(), Modifier.weight(1f))
+                                } else ChatTimeline(chatItems, blocked, Modifier.weight(1f).fillMaxWidth(),
+                                    running = working || live?.working == true, runningElapsed = live?.elapsed, loading = transcript == null || transcript is TranscriptState.Loading,
+                                    pendingMessages = pendingMessages.map { it.message })
+                            }
+                        }
                     }
                 }
                 // Scaffold padding excludes the top bar, composer and IME from these constraints.
-                if (!showTerminal && supportsChat(kind)) CommandSuggestionsPanel(
+                if (surface == DetailSurface.CHAT) CommandSuggestionsPanel(
                     commandQuery, commands, ready && !observe && !busy, maxHeight = maxHeight * .4f,
                     modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter), select = vm::selectCommand)
             }
