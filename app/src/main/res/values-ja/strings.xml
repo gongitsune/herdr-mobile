@@ -45,8 +45,6 @@
     <string name="back">戻る</string>
     <string name="terminal_menu">端末操作</string>
     <string name="interrupt">中断</string>
-    <string name="kill">強制終了</string>
-    <string name="kill_confirm">このリモート端末のプロセスを強制終了しますか？</string>
     <string name="observe">監視（読み取り専用）</string>
     <string name="interactive">操作モードに切り替え</string>
     <string name="close">閉じる</string>
@@ -114,10 +112,10 @@
     <string name="message_agent">%1$s にメッセージ…</string>
     <plurals name="work_reads"><item quantity="other">%d ファイル参照</item></plurals>
     <string name="copy_code">コードをコピー</string>
-    <string name="new_terminal">端末を作成</string>
+    <string name="new_terminal">新しいターミナル</string>
     <string name="changes">変更</string>
     <string name="files">ファイル</string>
-    <string name="workspace_panel">ワークスペース</string>
+    <string name="workspace_panel">変更とファイル</string>
     <string name="refresh">更新</string>
     <string name="no_changes">作業ツリーに変更はありません。</string>
     <string name="no_diff">テキスト差分はありません。未追跡・バイナリのファイルには差分がない場合があります。</string>
@@ -143,5 +141,27 @@
     <string name="new_command">コマンド…</string>
     <string name="not_repository">Git リポジトリではありません</string>
     <string name="new_command_input">コマンド</string>
-    <string name="empty_space_create_terminal">＋ で端末を作成</string>
+    <string name="empty_space_create_terminal">タイトルの ⌄ から新しいターミナルを作成</string>
+    <string name="show_tabs">タブを表示</string>
+    <string name="space_tabs">%1$s のタブ</string>
+    <string name="close_tab">このタブを閉じる</string>
+    <string name="close_named_tab">%1$s を閉じる</string>
+    <string name="close_tab_confirm">「%1$s」のすべての端末を終了しますか？</string>
+    <string name="new_agent_tab">エージェントで新しいタブ…</string>
+    <string name="new_space">新しい Space</string>
+    <string name="space_folder">フォルダ</string>
+    <string name="home_folder">ホーム（既定）</string>
+    <string name="agents_waiting">%1$d 件の対応待ち</string>
+    <string name="agents_resting">+%1$d 件 待機中</string>
+    <string name="tab_working">作業中</string>
+    <string name="tab_blocked">対応が必要</string>
+    <string name="tab_done">完了</string>
+    <string name="rename">名前を変更</string>
+    <string name="space_actions">%1$s の操作</string>
+    <string name="rename_name">名前</string>
+    <string name="rename_hint">空欄で既定の名前に戻す</string>
+    <string name="rename_conflict">他の画面で変更されました。もう一度お試しください</string>
+    <string name="rename_not_in_layout">この Space またはタブは見つかりません</string>
+    <string name="rename_disconnected">接続されていません。再接続してお試しください</string>
+    <string name="rename_failed">名前を変更できませんでした。もう一度お試しください</string>
 </resources>

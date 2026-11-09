@@ -197,7 +197,7 @@ staleTerminals は明示 close 後も新 snapshot まで保持される。app �
 
 ### 構成モデル（読み取り専用）
 - Space / Tab / Pane は、core の document `herdr-app`（`doc.get`、`doc` イベントで読み直す）と端末ラベル `herdr.*` から組み立てる。`docs/labels.md` の規約に従う。
-- **`herdr-app` document には絶対に書き込まない**（デスクトップの配置が壊れる。Heeler ADR 0032）。新しい端末を Space に入れるときは、herdr-app の規約どおりのラベルを付けて取り込ませる。
+- **`herdr-app` document には絶対に書き込まない**（デスクトップの配置が壊れる。Heeler ADR 0032）。例外は Phase 8 追補の「Space とタブの名前変更」だけ。新しい端末を Space に入れるときは、herdr-app の規約どおりのラベルを付けて取り込ませる。
 - ~~ラベルの無い端末は cwd ごとの「派生 Space」に入れる。~~ → **Phase 6 で廃止**。Space の出し方は herdr-app に合わせる（下の「Phase 6」節）。
 - Agent 判定: foreground プログラムを unwrap して（`sh -c`、`npx`、herdr-app のラッパー）、claude / codex などの既知エージェントか、Program Status を報告しているかで決める。
 
@@ -238,13 +238,16 @@ object AgentDetector {
     fun unwrap(argv: List<String>): List<String>
 }
 data class Pane(val id: String, val terminal: Terminal, val agent: AgentInfo? = null)
-data class Tab(val id: String, val name: String, val panes: List<Pane>)
+data class Tab(val id: String, val name: String, val panes: List<Pane>, val explicitName: String = "") // Phase 8
 data class Space(val id: String, val name: String, val cwd: String, val tabs: List<Tab>,
-                 val machine: String? = null, val derived: Boolean = false)
+                 val machine: String? = null, val explicitName: String = "") // Phase 6: derived 削除 / Phase 8: explicitName
 class WorkspaceStore(client: HcClient, scope: CoroutineScope) : java.io.Closeable {
     val spaces: StateFlow<List<Space>>
     val error: StateFlow<HcError?>
     suspend fun refresh()
+    fun canRename(spaceId: String): Boolean                              // Phase 8 追補
+    suspend fun renameSpace(spaceId: String, name: String)               // Phase 8 追補（document の name のみ書く）
+    suspend fun renameTab(spaceId: String, tabId: String, name: String)  // Phase 8 追補
     override fun close()
 }
 ```
@@ -558,6 +561,107 @@ codex-b（app）:
 
 ### Phase 7 エミュレータ確認の修正（2026-11-09）
 - codex-b：ドロワーの **Space 行（名前の部分）をタップしたら、その Space を開く**（herdr-app でスペースをクリックしたときと同じ）。開くのは、最初のタブの最初のエージェント Pane。エージェントが無ければ最初の Pane（シェル）。Pane が 1 つも無い Space では、その Space を選んだ状態にして本文に「＋ で端末を作成」と出し、タブ行の「＋」を使えるようにする。今はシェルだけの Space をタップしても何も起きず、行き止まりになっている。
+
+## Phase 8: タブと Space の操作を Ovis のモバイル版に合わせる
+
+### 背景（ユーザー指摘 2026-11-09）
+「Ovis のデモ（https://ovis.sh/demo/）か GitHub を見て、タブの操作方法やスペースなどの UI を使いやすくする」。
+Claude がエミュレータの Chrome でデモを操作し、ref/ovis の DESIGN.md（Shell 節、Menu 節の phone のタブ、Sidebar roster row）を読んで確認した。要点：
+- 電話幅ではタブの行を出さない。ヘッダーのタイトル（エージェントのマーク＋名前＋ `⌄`）全体が 1 つのボタンで、押すと「<Space> のタブ」ボトムシートが開く。
+- ドロワーは Space（workspace）の行だけを並べ、各行に `⋯`。エージェントは下端の「Agents」節に別にまとめ、電話では折りたたんだ状態で始める。
+- 考え方だけを取り入れ、コードやブランドはコピーしない。**herdr-app の document には書き込まない**ので、document を書き換える操作（タブの移動・名前変更、Space の名前変更・ピン留め）は入れない。
+
+### ヘッダーとタブ（codex-b）
+- タブ行（`PrimaryScrollableTabRow` と右端の ＋）を削除する。
+- トップバー：☰ ／ **タイトルボタン**（今のタブのエージェントのマーク、なければ端末アイコン＋タブ名またはエージェント名、その後ろに `⌄`、2 行目に小さく `Space 名`）／ Chat・Terminal のセグメント ／ ⋯。
+- タイトルボタンで「<Space 名> のタブ」ボトムシートを開く：
+  - 各タブの行：状態ドット（working・blocked・done は色付き、それ以外は中抜き）、エージェントのマーク（なければ端末アイコン）、タブ名、右に状態語（作業中／対応が必要／完了。idle は出さない）、`×`（閉じる）。今のタブは背景を強調。行をタップするとそのタブを開く（タブ内の最初のエージェント Pane、なければ最初の Pane）。
+  - `×`：確認ダイアログの後、そのタブの端末をすべて `terminal.kill`（サブエージェントは含めない）。開いていたタブなら、同じ Space の別のタブへ移る。なければ Space を選んだ状態にする。
+  - 区切り線の後に「新しいターミナル」（シェルを即作成）と「エージェントで新しいタブ…」（Claude Code / Codex / コマンド… を選ぶ。今の NewTerminalSheet の中身）。
+  - 一番下に「キャンセル」。
+- ⋯ メニュー：中断 ／ 閲覧専用 ⇔ 操作 ／ 変更とファイル（今の Space の Changes / Files シート）／ このタブを閉じる（確認あり）。
+
+### ドロワー（codex-b）
+- ホストの見出し：PC アイコン、ホスト名、接続ドット、折りたたみ `⌄`。見出しの「＋」は廃止する（ホストの追加は設定から）。
+- **Space の行**：フォルダアイコン、Space 名、2 行目にブランチ（あれば）。右端に状態の印（中の誰かが blocked なら赤い「?」、working なら青いドット、未読の done ならドット）と `⋯`。
+  - 行をタップ：その Space を開く（前回その Space で開いていたタブ、なければ最初のエージェント、なければ最初の Pane、なければ空の Space として選ぶ）。
+  - `⋯`：ボトムシート。見出しに Space 名と「ブランチ · フォルダ」を小さく出す。項目は「変更とファイル」「新しいターミナル」「エージェントで新しいタブ…」「キャンセル」。
+  - **Space の下にエージェントの子行は出さない**（Agents 節にまとめる）。
+- ホストの最後に「＋ 新しい Space」の行：ボトムシートでフォルダ（既定はホーム、テキスト入力）と起動するもの（シェル / Claude Code / Codex）を選んで作成。新しい Space ID（herdr-app と同じ `sp` + 16 進 32 桁。window.rs 2428 行付近）と新しいタブ ID を `herdr.space` / `herdr.tab` ラベルに付けて端末を作る（デスクトップの herdr-app が Space として取り込む）。作ったら開く。
+- 下端の **Agents 節**：見出しは折りたたみの `›`、「エージェント」、対応待ちがあれば赤字で「n 件の対応待ち」。電話では折りたたみ状態で始め、開閉は端末に保存する。
+  - 開くと、blocked・working・未読 done のエージェントを行で出す（マーク、タイトル、薄く Space 名）。それ以外は「+n 件 待機中」の折りたたみ行の中にまとめる。
+  - 今開いているエージェントは背景を強調。タップで開く。
+- 歯車（設定）はそのまま。
+
+### その他
+- 単体テスト：タブの状態の集約、「Space を開く」ときに選ぶ Pane、Agents 節の振り分け、新しい Space のラベル。
+- 不要になったコードと文字列（values と values-ja）は削除する。
+- default セッションには触らない。動作確認は、エミュレータからテスト用 core `herdr-mobile-it` に接続して Claude が行う。
+
+### Phase 8 追補：名前の変更（ユーザー決定 2026-11-09）
+ユーザーの指示で、**Space とタブの名前変更だけ** document `herdr-app` への書き込みを許可する（それ以外の書き込み禁止は変えない）。
+根拠：herdr-app 自身が `doc.set` を version 付きの CAS で書き、他のクライアントによる変更は `doc` イベントで読み直して反映する（ref/herdr-app/src/mirror_sync.rs、window.rs `documents_updated` の「Layout changed elsewhere」）。
+
+**codex-a（core-client）**
+- `WorkspaceStore` に次を追加する：
+  ```kotlin
+  suspend fun renameSpace(spaceId: String, name: String)              // spaceId は Space.id（machine 修飾付き）
+  suspend fun renameTab(spaceId: String, tabId: String, name: String) // tabId は Tab.id（machine 修飾付き）
+  fun canRename(spaceId: String): Boolean                             // その Space が machine の document にあるときだけ true
+  ```
+- 手順：対象 machine の `doc.get` で値と `version` を取得 → **生の JSON のまま**、該当 Space（`spaces[].id`）またはタブ（`tabs[].id`）の `name` だけを置き換える（ID は machine 修飾を外して照合する。未知のフィールドや順序は一切変えない）→ `doc.set {name:"herdr-app", on, version, value}`。
+- `conflict` エラーなら読み直してやり直す（最大 3 回）。
+- **document にまだ無い Space／タブ（デスクトップで一度も開いていない、ラベルで取り込んだもの）も名前を変えられる**（ユーザー決定 2026-11-09）。その場合は herdr-app の `adopt`（ref/herdr-app/src/window.rs の `start_adoption` / `adopt`、model.rs の `Tab::new` / `fresh_id`）と同じ形で document に追加してから名前を付ける：
+  - 対象の端末に `terminal.keep {keep:true}`（herdr-app と同じ）。
+  - Space が無ければ `{id: ラベルの Space ID（machine 修飾なし）, name, folder: foreground の cwd → cwd → ホーム, tabs: [...]}` を末尾に追加。
+  - タブ：`herdr.tab` があればその ID、無ければ `tb`+16 進 32 桁。`root` は herdr-app の `Node::container(<タブ ID>, Row, [pane])`、pane は `p`+16 進 32 桁 の ID で terminal（machine 修飾なしのアドレス）を持つ block。既存のタブに入れる場合は herdr-app の `adopt` と同じく最後の pane の横に分割する。
+  - 1 回の `doc.set` でまとめて書く（CAS とやり直しは同じ）。
+  - JSON の形は herdr-app の serde と完全に一致させる。ref/herdr-app の `mirror::Document` / `layout::Node` の serde 定義を読み、**ref/herdr-app で一時的な Rust テスト（cargo test、コミットしない・終わったら消す）を書いて、モバイルが作る JSON が `Document` として読めることを確認する**。
+  - `canRename` は「その machine の document を読めている」なら true（document に無くても追加できるため）。名前は前後の空白を削り、空なら `""`（herdr-app の既定の呼び方に戻る）。
+- 書き込み後は `refresh()` で投影を更新する。
+- テスト：未知のフィールドがそのまま残ること、名前以外が変わらないこと、conflict でのやり直し、machine 修飾の扱い、document に無いときのエラー。結合テスト（`herdr-mobile-it`）で doc.set → doc.get の往復も確認する。
+- PLAN.md の Phase 4 公開 API の WorkspaceStore にこの 3 つを追記する。
+
+**codex-b（app）**（Phase 8 の後で）
+- タブのシートで、各タブの行を長押しするか今のタブの「名前を変更」から、ダイアログで名前を変える。Space の `⋯` シートに「名前を変更」を追加する。
+- `canRename` が false（その machine の document を読めていない）のときだけ項目を薄く出す。
+- エラー時は短いメッセージを出す。
+
+### Phase 8 レビュー修正（Claude レビュー＋エミュレータ確認 2026-11-09）
+codex-b（app）:
+1. 新しい Space の既定フォルダはホームにする（herdr-app と同じ）。フォルダ欄は空なら、その machine のホームに解決して `cwd` に入れる（`machine.exec` で `$HOME` を取得するなど）。先頭の `~` も展開する。誤った前提のテスト（cwd が null）は直す。
+2. タブを閉じる：先に次の行き先（同じ Space の別のタブ、なければ空の Space を選んだ状態）へ移ってから kill する。全端末に kill を試し、`not_found` は成功扱い、エラーはまとめて出す。別のタブを閉じたときはシートを閉じない。
+3. タイトル：タブ名が既定の番号（名前が無い）ときは、エージェントのタイトル（なければ端末のタイトル）を大きく出し、番号は出さない。タブのシートの行も同じ。
+4. 空の Space の案内は「タイトルの ⌄ から新しいターミナル」のように今の UI に合わせるか、本文に「新しいターミナル」ボタンを置く。
+5. 「ワークスペース」の文言は「変更とファイル」にする（Space の ⋯ シート、⋯ メニュー）。Space 行の ⋯ のアクセシビリティラベルは「<Space 名> の操作」。アイコンは横の ⋯（MoreHoriz）。
+6. 見た目（Ovis に合わせる）：ドロワーの Space 行は白いカードの塗りをやめ、選択中の行だけ薄い塗り。ボトムシートの項目（Space の ⋯、タブのシートの作成 2 項目）は中央寄せのボタンではなく、アイコン付きで左寄せの 1 行リスト。タブのシートの各行もカードにせず平らな行で、今のタブだけ塗る。
+7. タブのシートと Space の ⋯ シートは最新の Space を参照し、Space が消えたら閉じる。
+8. 今のタブの行を押したときはシートを閉じるだけにする（見ていた Pane から移らない）。
+9. 作成に失敗したら、エラーと一緒にやり直せる状態に戻す。
+10. ホストが 0 件のとき、ドロワーに「ホストを追加」の行を出す（設定の追加ダイアログを開く）。
+11. 新しい端末の env に herdr-app と同じ `COLORTERM` / `TERM_PROGRAM` を付ける（ref/herdr-app/src/hc.rs の run）。
+12. 「Phase 8 追補：名前の変更」の codex-b の項（タブのシートの長押し／今のタブの「名前を変更」、Space の ⋯ の「名前を変更」、`canRename` が false のときだけ薄く）。
+
+### Phase 8 レビュー修正 2（Claude レビュー 2026-11-09）
+**公開 API 変更（codex-a が先に入れる）**
+```kotlin
+data class Tab(val id: String, val name: String, val panes: List<Pane>, val explicitName: String = "")
+data class Space(..., val machine: String? = null, val explicitName: String = "")
+// name は表示用（空なら番号やフォルダ名から作る）。explicitName は document の生の name（無ければ ""）。
+```
+**codex-a（core-client）**
+1. `Space.explicitName` / `Tab.explicitName` を追加（document の name をそのまま。document に無いものは ""）。
+2. `renameSpace` / `renameTab`：前後の空白を削った新しい名前が今の explicitName と同じなら何も書かない（doc.set しない。デスクトップに「Layout changed elsewhere」を出さないため）。
+3. `WorkspaceAdoption`：既存タブの root に pane が無いとき、タブ全体ではなく root だけを差し替える（タブの name と未知のフィールドを残す）。`herdr.tab` のタブ ID は herdr-app と同じく全 Space から探す（別の Space にあればそちらに入れる）。
+4. テストを追加。PLAN.md の Phase 4 公開 API のデータクラスにも反映。
+
+**codex-b（app）**
+1. 名前変更ダイアログの初期値は `explicitName`（空なら空欄で、プレースホルダーに今の表示名を薄く出す）。変更が無ければ書かずに閉じる。数字だけのタブ名を既定とみなす判定（`toIntOrNull`）は `explicitName.isEmpty()` に置き換える（タイトル表示も同じ）。
+2. 名前変更のエラーは専用の短い文言にする：`conflict`（「他の画面で変更されました。もう一度お試しください」）、`not_in_layout`、接続なし。
+3. `canRename` は Space 一覧の更新に合わせて再評価する（composition 中の `.value` 読みだけにしない）。
+4. タブを閉じる：`not_live` など「すでに終わっている」系のエラーも成功扱い。kill 対象は確定時点の最新のタブから取る。
+5. シートで pane の無いタブを押したら、空の Space を選んだ状態にする（何も起きないのを避ける）。
+6. 新しい Space のホームは、そのホスト（SSH 先）の `$HOME`。herdr-app はデスクトップのホームを使うが、モバイルの接続先はそのホストなのでこれで正しい（意図的な違い）。
 
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。

@@ -45,8 +45,6 @@
     <string name="back">Back</string>
     <string name="terminal_menu">Terminal actions</string>
     <string name="interrupt">Interrupt</string>
-    <string name="kill">Kill</string>
-    <string name="kill_confirm">Kill this remote terminal process?</string>
     <string name="observe">Observe (read only)</string>
     <string name="interactive">Switch to interactive</string>
     <string name="close">Close</string>
@@ -117,7 +115,7 @@
     <string name="new_terminal">New terminal</string>
     <string name="changes">Changes</string>
     <string name="files">Files</string>
-    <string name="workspace_panel">Workspace</string>
+    <string name="workspace_panel">Changes and files</string>
     <string name="refresh">Refresh</string>
     <string name="no_changes">Working tree is clean.</string>
     <string name="no_diff">No text diff. Untracked and binary files may not have a diff.</string>
@@ -143,5 +141,27 @@
     <string name="new_command">Command…</string>
     <string name="not_repository">Not a Git repository</string>
     <string name="new_command_input">Command</string>
-    <string name="empty_space_create_terminal">Create a terminal with +</string>
+    <string name="empty_space_create_terminal">Use the title’s ⌄ to create a terminal</string>
+    <string name="show_tabs">Show tabs</string>
+    <string name="space_tabs">Tabs of %1$s</string>
+    <string name="close_tab">Close this tab</string>
+    <string name="close_named_tab">Close %1$s</string>
+    <string name="close_tab_confirm">Stop all terminals in “%1$s”?</string>
+    <string name="new_agent_tab">New tab with agent…</string>
+    <string name="new_space">New Space</string>
+    <string name="space_folder">Folder</string>
+    <string name="home_folder">Home (default)</string>
+    <string name="agents_waiting">%1$d need you</string>
+    <string name="agents_resting">+%1$d resting</string>
+    <string name="tab_working">Working</string>
+    <string name="tab_blocked">Needs you</string>
+    <string name="tab_done">Done</string>
+    <string name="rename">Rename</string>
+    <string name="space_actions">%1$s actions</string>
+    <string name="rename_name">Name</string>
+    <string name="rename_hint">Leave blank for the default name</string>
+    <string name="rename_conflict">Changed on another screen. Please try again.</string>
+    <string name="rename_not_in_layout">This space or tab is no longer available.</string>
+    <string name="rename_disconnected">Not connected. Please reconnect and try again.</string>
+    <string name="rename_failed">Could not rename. Please try again.</string>
 </resources>

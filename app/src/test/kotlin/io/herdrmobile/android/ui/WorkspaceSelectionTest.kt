@@ -18,12 +18,21 @@ class WorkspaceSelectionTest {
         ).openingPane())
     }
 
-    @Test fun shellOnlyFirstTabWinsOverAgentInLaterTab() {
+    @Test fun firstAgentInSpaceWinsOverShellInEarlierTab() {
         val shell = pane("shell")
-        assertEquals(shell, space(
+        val agent = pane("agent", true)
+        assertEquals(agent, space(
             Tab("first", "1", listOf(shell, pane("second-shell"))),
-            Tab("second", "2", listOf(pane("agent", true)))
+            Tab("second", "2", listOf(agent))
         ).openingPane())
+    }
+
+    @Test fun rememberedTabWinsAndMissingRememberedTabFallsBack() {
+        val shell = pane("shell")
+        val agent = pane("agent", true)
+        val space = space(Tab("shell-tab", "Shell", listOf(shell)), Tab("agent-tab", "Agent", listOf(agent)))
+        assertEquals(shell, space.openingPane("shell-tab"))
+        assertEquals(agent, space.openingPane("deleted"))
     }
 
     @Test fun subAgentDoesNotReplaceItsShellParent() {

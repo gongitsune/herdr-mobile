@@ -13,8 +13,7 @@ import android.provider.Settings
 import io.herdrmobile.android.MainActivity
 
 import androidx.core.content.edit
-import androidx.compose.foundation.Canvas
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -30,6 +29,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -56,6 +56,7 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
     var host by rememberSaveable { mutableStateOf(preferences.getString("host", null)) }
     var terminal by rememberSaveable { mutableStateOf(preferences.getString("terminal", null)) }
     var selectedSpaceId by rememberSaveable { mutableStateOf<String?>(null) }
+    var emptiedSpace by remember { mutableStateOf<Pair<String, Space>?>(null) }
     var settings by rememberSaveable { mutableStateOf(false) }
     val drawer = rememberDrawerState(if (terminal == null) DrawerValue.Open else DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -86,6 +87,20 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
         }
     }
     var files by remember { mutableStateOf<Pair<String, Space>?>(null) }
+
+    var spaceActions by remember { mutableStateOf<Pair<String, Space>?>(null) }
+    var tabSheet by remember { mutableStateOf<Pair<String, Space>?>(null) }
+    var closing by remember { mutableStateOf<Triple<String, Space, io.herdrmobile.core.workspace.Tab>?>(null) }
+    var closeBusy by remember { mutableStateOf(false) }
+    var closeErrors by remember { mutableStateOf<List<Pair<String, io.herdrmobile.core.rpc.HcError>>>(emptyList()) }
+    var renaming by remember { mutableStateOf<Triple<String, String, String?>?>(null) }
+    var renameValue by remember { mutableStateOf("") }
+    var renameOriginal by remember { mutableStateOf("") }
+    var renamePlaceholder by remember { mutableStateOf("") }
+    var renameBusy by remember { mutableStateOf(false) }
+    var renameError by remember { mutableStateOf<io.herdrmobile.core.rpc.HcError?>(null) }
+    var shellOnly by remember { mutableStateOf(false) }
+    var newSpace by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf<Pair<String, Space>?>(null) }
     val terminalRows by app.connections.terminals.collectAsStateWithLifecycle()
     val connection = statuses.find { it.host.id == host }?.state
@@ -106,12 +121,19 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
     val pending by pendingDestination.collectAsStateWithLifecycle()
     val hostsVm: HostsViewModel = viewModel(factory = factory { HostsViewModel(app.hosts, app.connections) })
     fun open(hostId: String, terminalId: String) {
-        host = hostId; terminal = terminalId; selectedSpaceId = null; settings = false
+        emptiedSpace = null
+        host = hostId; terminal = terminalId; settings = false
+        val space = workspaces.filter { it.hostId == hostId }.flatMap { it.spaces }.find { it.tabs.any { tab -> tab.panes.any { it.terminal.id == terminalId || it.subAgents.any { child -> child.terminal.id == terminalId } } } }
+        selectedSpaceId = space?.id
+        space?.tabs?.find { it.panes.any { it.terminal.id == terminalId || it.subAgents.any { child -> child.terminal.id == terminalId } } }?.let { tab ->
+            preferences.edit { putString("tab:$hostId:${space.id}", tab.id) }
+        }
         preferences.edit { putString("host", hostId); putString("terminal", terminalId) }
         scope.launch { drawer.close() }
     }
     fun openSpace(hostId: String, space: Space) {
-        val pane = space.openingPane()
+        emptiedSpace = null
+        val pane = space.openingPane(preferences.getString("tab:$hostId:${space.id}", null))
         if (pane != null) {
             open(hostId, pane.terminal.id)
         } else {
@@ -120,8 +142,21 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
             scope.launch { drawer.close() }
         }
     }
+    fun create(hostId: String, space: Space, shell: Boolean = false, fresh: Boolean = false) {
+        shellOnly = shell; newSpace = fresh; creating = hostId to space
+        spaceActions = null; tabSheet = null
+    }
+    fun canRename(hostId: String, spaceId: String) = workspaces.any { it.hostId == hostId && spaceId in it.renameableSpaceIds }
+    fun rename(hostId: String, space: Space, tab: io.herdrmobile.core.workspace.Tab? = null) {
+        renaming = Triple(hostId, space.id, tab?.id)
+        renameOriginal = tab?.explicitName ?: space.explicitName
+        renameValue = renameOriginal
+        renamePlaceholder = tab?.displayTitle() ?: space.name
+        renameError = null
+    }
     val selectedSpace = workspaces.filter { it.hostId == host }.flatMap { it.spaces }
-        .find { it.id == selectedSpaceId }
+        .find { it.id == selectedSpaceId || it.tabs.any { tab -> tab.panes.any { pane -> pane.terminal.id == terminal || pane.subAgents.any { it.terminal.id == terminal } } } }
+        ?: emptiedSpace?.takeIf { it.first == host && it.second.id == selectedSpaceId && terminal == null }?.second
     LaunchedEffect(pending) { pending?.let { open(it.hostId, it.terminalId); consumed() } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
@@ -130,7 +165,9 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
         val drawerContent: @Composable () -> Unit = {
             Column(Modifier.width(300.dp).fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
-                    if (statuses.isEmpty()) IconButton(onClick = { hostsVm.edit(null); settings = true; scope.launch { drawer.close() } }) { Icon(Icons.Default.Add, stringResource(R.string.add_host)) }
+                    if (statuses.isEmpty()) TextButton(onClick = { settings = true; hostsVm.edit(null); scope.launch { drawer.close() } }) {
+                        Icon(Icons.Default.Add, null); Text(stringResource(R.string.add_host))
+                    }
                     statuses.forEach { status ->
                         var expanded by rememberSaveable(status.host.id) { mutableStateOf(true) }
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -138,35 +175,43 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
                             Text(status.host.name, Modifier.weight(1f).padding(8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Box(Modifier.size(7.dp).background(if (status.state is ConnectionState.Connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error, CircleShape))
                             IconButton(onClick = { expanded = !expanded }) { Icon(if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight, stringResource(R.string.collapse)) }
-                            IconButton(onClick = { hostsVm.edit(null); settings = true; scope.launch { drawer.close() } }) { Icon(Icons.Default.Add, stringResource(R.string.add_host)) }
                         }
-                        if (expanded) workspaces.filter { it.hostId == status.host.id }.flatMap { it.spaces }.forEach { space ->
-                            Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (expanded) {
+                        workspaces.filter { it.hostId == status.host.id }.flatMap { it.spaces }.forEach { space ->
+                            Row(Modifier.padding(vertical = 4.dp).background(if (host == status.host.id && selectedSpace?.id == space.id) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, MaterialTheme.shapes.small), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.FolderOpen, null, Modifier.size(20.dp))
                                 Column(Modifier.weight(1f)
-                                    .background(if (host == status.host.id && selectedSpaceId == space.id) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface, MaterialTheme.shapes.small)
                                     .clickable { openSpace(status.host.id, space) }.padding(start = 8.dp, top = 8.dp, bottom = 8.dp)) {
                                     Text(space.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     branches[status.host.id to space.id]?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                                 }
-                                IconButton(onClick = { files = status.host.id to space }) { Icon(Icons.Default.MoreVert, stringResource(R.string.workspace_panel)) }
+                                AgentMark(space.tabs.mapNotNull { it.aggregateState() }.minByOrNull { when(it) { "blocked", "error" -> 0; "working" -> 1; "done" -> 2; else -> 3 } }, space.tabs.flatMap { it.panes }.any { pane -> agents.any { it.hostId == status.host.id && it.terminal.id == pane.terminal.id && unread(it) } })
+                                IconButton(onClick = { spaceActions = status.host.id to space }) { Icon(Icons.Default.MoreHoriz, stringResource(R.string.space_actions, space.name)) }
                             }
-                            val rows = space.tabs.flatMap { it.panes }.filter { it.agent != null }.mapNotNull { pane ->
-                                agents.find { it.hostId == status.host.id && it.terminal.id == pane.terminal.id }
-                            }
-                            rows.forEachIndexed { index, row ->
-                                DrawerAgent(row, host == row.hostId && terminal == row.terminal.id, branches[status.host.id to space.id] ?: space.name, true, unread(row), index == rows.lastIndex) { open(row.hostId, row.terminal.id) }
-                            }
+                        }
+                        TextButton(onClick = { create(status.host.id, Space(freshSpaceId(), "", "", emptyList()), fresh = true) }, enabled = status.state is ConnectionState.Connected) {
+                            Icon(Icons.Default.Add, null); Text(stringResource(R.string.new_space))
+                        }
                         }
                     }
                 }
-                var allAgents by rememberSaveable { mutableStateOf(false) }
-                TextButton(onClick = { allAgents = !allAgents }, modifier = Modifier.fillMaxWidth()) {
+                var allAgents by rememberSaveable { mutableStateOf(preferences.getBoolean("agents-expanded", false)) }
+                var resting by rememberSaveable { mutableStateOf(false) }
+                val (activeAgents, restingAgents) = agents.sortedBy { it.terminal.priority }.partition { it.needsAttention(unread(it)) }
+                fun agentSpace(row: ConsoleTerminal) = workspaces.filter { it.hostId == row.hostId }.flatMap { it.spaces }.find { it.tabs.any { tab -> tab.panes.any { it.terminal.id == row.terminal.id || it.subAgents.any { child -> child.terminal.id == row.terminal.id } } } }?.name.orEmpty()
+                TextButton(onClick = { allAgents = !allAgents; preferences.edit { putBoolean("agents-expanded", allAgents) } }, modifier = Modifier.fillMaxWidth()) {
                     Icon(if (allAgents) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null)
-                    Text("${stringResource(R.string.agents)} ${agents.size}", Modifier.weight(1f))
+                    Text(stringResource(R.string.agents), Modifier.weight(1f))
+                    val waiting = agents.count { !it.stale && it.terminal.status?.state in listOf("blocked", "error") }
+                    if (waiting > 0) Text(stringResource(R.string.agents_waiting, waiting), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                 }
                 if (allAgents) Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
-                    agents.sortedBy { it.terminal.priority }.forEach { row -> DrawerAgent(row, host == row.hostId && terminal == row.terminal.id, row.hostName, false, unread(row)) { open(row.hostId, row.terminal.id) } }
+                    activeAgents.forEach { row -> DrawerAgent(row, host == row.hostId && terminal == row.terminal.id, agentSpace(row), unread(row)) { open(row.hostId, row.terminal.id) } }
+                    if (restingAgents.isNotEmpty()) TextButton(onClick = { resting = !resting }) {
+                        Icon(if (resting) Icons.Default.ExpandMore else Icons.Default.ChevronRight, null)
+                        Text(stringResource(R.string.agents_resting, restingAgents.size))
+                    }
+                    if (resting) restingAgents.forEach { row -> DrawerAgent(row, host == row.hostId && terminal == row.terminal.id, agentSpace(row), unread(row)) { open(row.hostId, row.terminal.id) } }
                 }
                 IconButton(onClick = { settings = true; scope.launch { drawer.close() } }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
             }
@@ -182,39 +227,32 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
         val content: @Composable () -> Unit = {
             Box(Modifier.fillMaxSize()) {
             if (host != null && terminal != null) key(host, terminal) {
-                TerminalScreen(checkNotNull(selectedVm), showMenu = !wide, tabs = {
-                    val space = workspaces.filter { it.hostId == host }.flatMap { it.spaces }.find { space -> space.tabs.any { tab -> tab.panes.any { it.terminal.id == terminal || it.subAgents.any { child -> child.terminal.id == terminal } } } }
-                    space?.let {
-                        val index = space.tabs.indexOfFirst { tab -> tab.panes.any { it.terminal.id == terminal || it.subAgents.any { child -> child.terminal.id == terminal } } }.coerceAtLeast(0)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                        PrimaryScrollableTabRow(selectedTabIndex = index, edgePadding = 12.dp, modifier = Modifier.weight(1f)) {
-                            space.tabs.forEachIndexed { i, tab ->
-                                val pane = tab.openingPane()
-                                Tab(selected = i == index, enabled = pane != null, onClick = { pane?.let { open(host!!, it.terminal.id) } }, text = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { AgentMark(tab.panes.mapNotNull { it.terminal.status?.state }.minByOrNull { when (it) { "blocked", "error" -> 0; "working" -> 1; "done" -> 2; else -> 3 } }, tab.panes.any { pane -> agents.any { row -> row.hostId == host && row.terminal.id == pane.terminal.id && unread(row) } }); Text(tab.name, maxLines = 1) } })
-                            }
+                val space = selectedSpace
+                val tab = space?.tabs?.find { it.panes.any { pane -> pane.terminal.id == terminal || pane.subAgents.any { it.terminal.id == terminal } } }
+                TerminalScreen(checkNotNull(selectedVm), showMenu = !wide,
+                    titleContent = { WorkspaceTitle(tab?.displayTitle()?.takeIf { it.isNotBlank() } ?: terminalRows.find { it.hostId == host && it.terminal.id == terminal }?.terminal?.let { it.title.ifBlank { it.name ?: it.id } }.orEmpty(), space?.name.orEmpty(), tab?.openingPane()?.agent?.kind, space != null) { space?.let { tabSheet = host!! to it } } },
+                    relatedAgents = {
+                        val parent = tab?.panes?.find { it.terminal.id == terminal || it.subAgents.any { child -> child.terminal.id == terminal } }
+                        if (!parent?.subAgents.isNullOrEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                            val links = if (parent!!.terminal.id == terminal) parent.subAgents else listOf(parent) + parent.subAgents
+                            links.forEach { child -> TextButton(onClick = { open(host!!, child.terminal.id) }) { Text(child.terminal.title.ifBlank { child.terminal.name ?: child.id }, maxLines = 1) } }
                         }
-                        IconButton(onClick = { creating = host!! to space }) { Icon(Icons.Default.Add, stringResource(R.string.new_terminal)) }
-                        }
-                    }
-                    val children = workspaces.filter { it.hostId == host }.flatMap { it.spaces }.flatMap { it.tabs }.flatMap { it.panes }.find { it.terminal.id == terminal }?.subAgents.orEmpty()
-                    if (children.isNotEmpty()) Row(Modifier.fillMaxWidth()) { children.forEach { child -> TextButton(onClick = { open(host!!, child.terminal.id) }) { Text(child.terminal.title.ifBlank { child.terminal.name ?: child.id }, maxLines = 1) } } }
-                }) { scope.launch { if (drawer.isOpen) drawer.close() else drawer.open() } }
+                    },
+                    workspaceFiles = space?.let { { files = host!! to it } },
+                    renameTab = tab?.let { { rename(host!!, space, it) } },
+                    canRename = space?.let { canRename(host!!, it.id) } == true,
+                    closeTab = tab?.let { { closing = Triple(host!!, space, it); closeErrors = emptyList() } },
+                ) { scope.launch { if (drawer.isOpen) drawer.close() else drawer.open() } }
             } else Scaffold(topBar = {
-                Column {
-                    TopAppBar(title = { Text(selectedSpace?.name.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis) }, navigationIcon = { if (!wide) IconButton(onClick = { scope.launch { drawer.open() } }) { Icon(Icons.Default.Menu, stringResource(R.string.open_menu)) } })
-                    selectedSpace?.let { space ->
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            if (space.tabs.isNotEmpty()) PrimaryScrollableTabRow(selectedTabIndex = 0, edgePadding = 12.dp, modifier = Modifier.weight(1f)) {
-                                space.tabs.forEachIndexed { index, tab ->
-                                    val pane = tab.openingPane()
-                                    Tab(selected = index == 0, enabled = pane != null, onClick = { pane?.let { open(host!!, it.terminal.id) } }, text = { Text(tab.name) })
-                                }
-                            } else Spacer(Modifier.weight(1f))
-                            IconButton(onClick = { creating = host!! to space }) { Icon(Icons.Default.Add, stringResource(R.string.new_terminal)) }
-                        }
-                    }
+                TopAppBar(title = { WorkspaceTitle(selectedSpace?.name.orEmpty(), "", null, selectedSpace != null) { selectedSpace?.let { tabSheet = host!! to it } } }, navigationIcon = { if (!wide) IconButton(onClick = { scope.launch { drawer.open() } }) { Icon(Icons.Default.Menu, stringResource(R.string.open_menu)) } })
+            }) { padding -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(stringResource(if (selectedSpace != null) R.string.empty_space_create_terminal else R.string.select_agent))
+                    selectedSpace?.let { space -> TextButton(onClick = { create(host!!, space, shell = true) }) {
+                        Icon(Icons.Default.Add, null); Text(stringResource(R.string.new_terminal))
+                    } }
                 }
-            }) { padding -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { Text(stringResource(if (selectedSpace != null) R.string.empty_space_create_terminal else R.string.select_agent)) } }
+            } }
             if (settings) Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.settings)) }, actions = { NotificationPermissionAction() }, navigationIcon = { IconButton(onClick = { settings = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } }) }) { padding -> Box(Modifier.padding(padding)) { HostsScreen(hostsVm) } }
             }
         }
@@ -228,24 +266,93 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
         val vm: WorkspaceFilesViewModel = viewModel(viewModelStoreOwner = owner, factory = factory { WorkspaceFilesViewModel(app.connections, hostId, space.cwd, space.machine) })
         WorkspaceSheet(vm, WorkspacePanel.CHANGES) { files = null }
     } }
-    creating?.let { (hostId, space) -> NewTerminalSheet(app.connections, hostId, space, { creating = null }) { id -> creating = null; open(hostId, id) } }
+    creating?.let { (hostId, space) -> NewTerminalSheet(app.connections, hostId, space, { creating = null }, { id -> creating = null; open(hostId, id) }, shellOnly, newSpace) }
+    tabSheet?.let { (hostId, snapshot) ->
+        val space = workspaces.filter { it.hostId == hostId }.flatMap { it.spaces }.find { it.id == snapshot.id }
+        if (space == null) LaunchedEffect(hostId, snapshot.id) { tabSheet = null }
+        else WorkspaceTabsSheet(space, terminal.takeIf { host == hostId }, { tabSheet = null }, { tab ->
+            if (!(host == hostId && tab.containsTerminal(terminal))) {
+                val pane = tab.openingPane()
+                if (pane != null) open(hostId, pane.terminal.id)
+                else {
+                    emptiedSpace = null; host = hostId; terminal = null; selectedSpaceId = space.id; settings = false
+                    preferences.edit { putString("host", hostId); remove("terminal"); putString("tab:$hostId:${space.id}", tab.id) }
+                }
+            }
+            tabSheet = null
+        }, { tab -> closing = Triple(hostId, space, tab); closeErrors = emptyList() },
+            { create(hostId, space, shell = true) }, { create(hostId, space) },
+            canRename(hostId, space.id), { rename(hostId, space, it) })
+    }
+    spaceActions?.let { (hostId, snapshot) ->
+        val space = workspaces.filter { it.hostId == hostId }.flatMap { it.spaces }.find { it.id == snapshot.id }
+        if (space == null) LaunchedEffect(hostId, snapshot.id) { spaceActions = null }
+        else {
+            val branches = rememberWorkspaceBranches(app.connections, workspaces, true)
+            SpaceActionsSheet(space, branchesForSpace = branches[hostId to space.id], dismiss = { spaceActions = null },
+                files = { spaceActions = null; files = hostId to space }, shell = { create(hostId, space, shell = true) },
+                agent = { create(hostId, space) }, canRename = canRename(hostId, space.id),
+                rename = { rename(hostId, space) })
+        }
+    }
+    closing?.let { (hostId, space, tab) ->
+        AlertDialog(onDismissRequest = { if (!closeBusy) closing = null }, title = { Text(stringResource(R.string.close_tab)) },
+            text = { Column { Text(stringResource(R.string.close_tab_confirm, tab.displayTitle())); closeErrors.forEach { (id, error) -> Text("$id: ${terminalErrorMessage(error)}", color = MaterialTheme.colorScheme.error) } } },
+            confirmButton = { TextButton(enabled = !closeBusy, onClick = {
+                closeBusy = true
+                scope.launch {
+                    try {
+                        val latest = app.connections.workspaces.value.filter { it.hostId == hostId }.flatMap { it.spaces }.find { it.id == space.id }
+                        val latestTab = latest?.tabs?.find { it.id == tab.id }
+                        val wasOpen = host == hostId && (latestTab ?: tab).containsTerminal(terminal)
+                        if (wasOpen) {
+                            val next = latest?.tabs?.firstOrNull { it.id != tab.id && it.openingPane() != null }
+                            if (next != null) open(hostId, next.openingPane()!!.terminal.id)
+                            else { emptiedSpace = hostId to space.copy(tabs = emptyList()); host = hostId; terminal = null; selectedSpaceId = space.id; preferences.edit { putString("host", hostId); remove("terminal"); remove("tab:$hostId:${space.id}") } }
+                            tabSheet = null
+                        }
+                        val client = checkNotNull(app.connections.client(hostId))
+                        closeErrors = closeTabTerminals(latestTab?.terminalIds().orEmpty(), client::kill)
+                        if (closeErrors.isEmpty()) closing = null
+                    } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                    catch (e: Exception) { closeErrors = listOf(tab.displayTitle() to e.asHcError()) }
+                    finally { closeBusy = false }
+                }
+            }) { Text(stringResource(R.string.close_tab)) } },
+            dismissButton = { TextButton(enabled = !closeBusy, onClick = { closing = null }) { Text(stringResource(R.string.cancel)) } })
+    }
+    renaming?.let { (hostId, spaceId, tabId) ->
+        AlertDialog(onDismissRequest = { if (!renameBusy) renaming = null },
+            title = { Text(stringResource(R.string.rename)) },
+            text = { Column {
+                OutlinedTextField(renameValue, { renameValue = it }, enabled = !renameBusy, singleLine = true,
+                    label = { Text(stringResource(R.string.rename_name)) }, placeholder = { Text(renamePlaceholder) }, supportingText = { Text(stringResource(R.string.rename_hint)) })
+                renameError?.let { Text(stringResource(renameErrorResource(it.kind)), color = MaterialTheme.colorScheme.error) }
+            } },
+            confirmButton = { TextButton(enabled = !renameBusy, onClick = {
+                if (!renameChanged(renameOriginal, renameValue)) { renaming = null; return@TextButton }
+                renameBusy = true
+                scope.launch {
+                    try {
+                        if (app.connections.statuses.value.none { it.host.id == hostId && it.state is ConnectionState.Connected })
+                            throw io.herdrmobile.core.rpc.HcError("disconnected", "Disconnected")
+                        val store = app.connections.workspace(hostId) ?: throw io.herdrmobile.core.rpc.HcError("disconnected", "Disconnected")
+                        if (tabId == null) store.renameSpace(spaceId, renameValue) else store.renameTab(spaceId, tabId, renameValue)
+                        renaming = null
+                    } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                    catch (e: Exception) { renameError = e.asHcError() }
+                    finally { renameBusy = false }
+                }
+            }) { Text(stringResource(R.string.rename)) } },
+            dismissButton = { TextButton(enabled = !renameBusy, onClick = { renaming = null }) { Text(stringResource(R.string.cancel)) } })
+    }
     trust?.let { request -> AlertDialog(onDismissRequest = { app.connections.answerTrust(request, false) }, title = { Text(stringResource(R.string.trust_title)) }, text = { Text(stringResource(R.string.trust_body, request.host.name, request.host.host, request.host.port, request.fingerprint)) }, confirmButton = { TextButton(onClick = { app.connections.answerTrust(request, true) }) { Text(stringResource(R.string.accept)) } }, dismissButton = { TextButton(onClick = { app.connections.answerTrust(request, false) }) { Text(stringResource(R.string.reject)) } }) }
 }
 
 @Composable
-private fun DrawerAgent(row: ConsoleTerminal, selected: Boolean, subtitle: String, tree: Boolean, unread: Boolean, lastChild: Boolean = false, open: () -> Unit) {
+private fun DrawerAgent(row: ConsoleTerminal, selected: Boolean, subtitle: String, unread: Boolean, open: () -> Unit) {
     Surface(color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface, shape = MaterialTheme.shapes.small) {
         Row(Modifier.fillMaxWidth().alpha(if (row.stale) 0.45f else 1f).clickable(enabled = !row.stale, onClick = open).padding(vertical = 10.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (tree) {
-                val lineColor = MaterialTheme.colorScheme.onSurfaceVariant
-                Canvas(Modifier.width(16.dp).height(40.dp)) {
-                    val x = 4.dp.toPx()
-                    val middle = size.height / 2
-                    val stroke = 1.5.dp.toPx()
-                    drawLine(lineColor, Offset(x, 0f), Offset(x, if (lastChild) middle else size.height), stroke)
-                    drawLine(lineColor, Offset(x, middle), Offset(size.width, middle), stroke)
-                }
-            }
             ProgramAvatar(AgentDetector.detect(row.terminal)?.kind)
             Column(Modifier.weight(1f)) {
                 Text(row.terminal.title.ifBlank { row.terminal.name ?: row.terminal.id }, maxLines = 1, overflow = TextOverflow.Ellipsis)

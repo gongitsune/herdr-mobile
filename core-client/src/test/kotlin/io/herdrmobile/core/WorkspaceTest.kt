@@ -28,6 +28,8 @@ class WorkspaceTest {
         val tabs=spaces.single { it.id=="s" }.tabs
         assertEquals(listOf("empty","named","missing","blank","adopted","terminal:later"),tabs.map { it.id })
         assertEquals(listOf("1","Primary","3","4","5","6"),tabs.map { it.name })
+        assertEquals(listOf("","Primary",""," ","",""),tabs.map { it.explicitName })
+        assertTrue(spaces.all { it.explicitName.isEmpty() })
         assertEquals(listOf("earlier","shared"),tabs[4].panes.map { it.terminal.id })
         assertEquals("1",spaces.single { it.id=="other" }.tabs.single().name)
         assertEquals("1",spaces.single { it.id=="new" }.tabs.single().name)
@@ -44,6 +46,7 @@ class WorkspaceTest {
         val spaces=projectWorkspace(terminals,linkedMapOf("" to document,"remote" to document))
         assertEquals(listOf("s","remote/s"),spaces.map { it.id })
         assertEquals("Desktop",spaces.first().name)
+        assertTrue(spaces.all { it.explicitName=="Desktop" })
         assertEquals(listOf("t1"),spaces.first().tabs.first().panes.map { it.terminal.id })
         assertEquals(listOf("child"),spaces.first().tabs.first().panes.single().subAgents.map { it.terminal.id })
         assertEquals("pane",spaces.first().tabs.first().panes.first().id)

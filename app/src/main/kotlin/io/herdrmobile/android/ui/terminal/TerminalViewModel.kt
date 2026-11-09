@@ -198,7 +198,6 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
         interrupt()
     }
     fun interrupt() { if (!observe.value && ready.value) action { checkNotNull(connections.client(hostId)).interrupt(id) } }
-    fun kill() { if (!observe.value && ready.value) action { checkNotNull(connections.client(hostId)).kill(id) } }
     private fun action(block: suspend () -> Unit) {
         if (busy.value) return
         viewModelScope.launch {

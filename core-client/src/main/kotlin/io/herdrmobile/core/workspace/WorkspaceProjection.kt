@@ -10,7 +10,7 @@ private fun JsonObject.string(key: String) = (get(key) as? JsonPrimitive)?.conte
 /** Pure projection: documents are read, never normalized back into desktop storage. */
 internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,JsonElement>): List<Space> {
     data class T(val id: String,val name: String,val panes: MutableList<Pane> = mutableListOf())
-    data class S(val id:String,var name:String,var cwd:String,val machine:String?,
+    data class S(val id:String,var name:String,var cwd:String,val machine:String?,val explicitName:String = "",
                  val tabs:LinkedHashMap<String,T> = linkedMapOf())
     val spaces=linkedMapOf<String,S>()
     val records=terminals.associateBy { it.id }
@@ -23,7 +23,7 @@ internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,J
             val rawId=doc.string("id").takeIf { it.isNotBlank() } ?: continue
             val id=qualify(rawId,machine)
             val folder=doc.string("folder")
-            val space=S(id,doc.string("name").ifBlank { folder.trimEnd('/').substringAfterLast('/').ifBlank { rawId } },folder,machine)
+            val space=S(id,doc.string("name").ifBlank { folder.trimEnd('/').substringAfterLast('/').ifBlank { rawId } },folder,machine,doc.string("name"))
             spaces[id]=space
             for (tabEntry in (doc["tabs"] as? JsonArray).orEmpty()) {
                 val tabDoc=tabEntry as? JsonObject ?: continue
@@ -83,8 +83,8 @@ internal fun projectWorkspace(terminals: List<Terminal>, documents: Map<String,J
     }
     return spaces.values.map { s ->
         Space(s.id,s.name,s.cwd,s.tabs.values.mapIndexed { index,tab ->
-            Tab(tab.id,tab.name.ifBlank { (index+1).toString() },tab.panes.map { it.copy(subAgents=children[it.terminal.id].orEmpty()) })
-        },s.machine)
+            Tab(tab.id,tab.name.ifBlank { (index+1).toString() },tab.panes.map { it.copy(subAgents=children[it.terminal.id].orEmpty()) },tab.name)
+        },s.machine,s.explicitName)
     }
 }
 

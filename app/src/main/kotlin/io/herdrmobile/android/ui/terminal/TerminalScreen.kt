@@ -21,7 +21,7 @@ import io.herdrmobile.android.ui.chat.*
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun TerminalScreen(vm: TerminalViewModel, tabs: @Composable () -> Unit = {}, showMenu: Boolean = true, back: () -> Unit) {
+fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)? = null, workspaceFiles: (() -> Unit)? = null, closeTab: (() -> Unit)? = null, renameTab: (() -> Unit)? = null, canRename: Boolean = false, relatedAgents: @Composable () -> Unit = {}, showMenu: Boolean = true, back: () -> Unit) {
     val connected by vm.connected.collectAsStateWithLifecycle()
     val observe by vm.observe.collectAsStateWithLifecycle()
     val draft by vm.draft.collectAsStateWithLifecycle()
@@ -35,7 +35,6 @@ fun TerminalScreen(vm: TerminalViewModel, tabs: @Composable () -> Unit = {}, sho
     val record by vm.record.collectAsStateWithLifecycle()
     val activity by vm.activity.collectAsStateWithLifecycle()
     var menu by remember { mutableStateOf(false) }
-    var confirmKill by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
     val chatItems by vm.chatItems.collectAsStateWithLifecycle()
     val transcript by vm.transcriptState.collectAsStateWithLifecycle()
@@ -53,7 +52,7 @@ fun TerminalScreen(vm: TerminalViewModel, tabs: @Composable () -> Unit = {}, sho
         modifier = Modifier.fillMaxSize(),
         topBar = {
             Column {
-            TopAppBar(title = { Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            TopAppBar(title = { if (titleContent != null) titleContent() else Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 io.herdrmobile.android.ui.theme.ProgramAvatar(record?.let { io.herdrmobile.core.workspace.AgentDetector.detect(it)?.kind })
                 Spacer(Modifier.width(6.dp))
                 Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
@@ -62,15 +61,17 @@ fun TerminalScreen(vm: TerminalViewModel, tabs: @Composable () -> Unit = {}, sho
                 actions = {
                     SurfaceSwitch(surface) { vm.selectedSurface.value = it }
                     Box {
-                        IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, stringResource(R.string.terminal_menu)) }
+                        IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreHoriz, stringResource(R.string.terminal_menu)) }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                             DropdownMenuItem(text = { Text(stringResource(R.string.interrupt)) }, enabled = ready && !observe && !busy, onClick = { menu = false; vm.interrupt() })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.kill)) }, enabled = ready && !observe && !busy, onClick = { menu = false; confirmKill = true })
                             DropdownMenuItem(text = { Text(stringResource(if (observe) R.string.interactive else R.string.observe)) }, onClick = { menu = false; vm.observe.value = !observe })
+                            workspaceFiles?.let { DropdownMenuItem(text = { Text(stringResource(R.string.workspace_panel)) }, onClick = { menu = false; it() }) }
+                            renameTab?.let { DropdownMenuItem(text = { Text(stringResource(R.string.rename)) }, enabled = canRename, onClick = { menu = false; it() }) }
+                            closeTab?.let { DropdownMenuItem(text = { Text(stringResource(R.string.close_tab)) }, onClick = { menu = false; it() }) }
                         }
                     }
                 })
-                tabs()
+                relatedAgents()
             }
         },
         bottomBar = {
@@ -110,8 +111,7 @@ fun TerminalScreen(vm: TerminalViewModel, tabs: @Composable () -> Unit = {}, sho
         }
     }
     CandidatePreview(vm)
-    if (confirmKill) AlertDialog(onDismissRequest = { confirmKill = false }, title = { Text(stringResource(R.string.kill)) },
-        text = { Text(stringResource(R.string.kill_confirm)) }, confirmButton = { TextButton(onClick = { confirmKill = false; vm.kill() }) { Text(stringResource(R.string.kill)) } }, dismissButton = { TextButton(onClick = { confirmKill = false }) { Text(stringResource(R.string.cancel)) } })
+
 
 }
 

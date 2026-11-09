@@ -17,7 +17,7 @@ import kotlinx.coroutines.sync.withLock
 data class HostStatus(val host: SavedHost, val state: ConnectionState)
 data class ConsoleTerminal(val hostId: String, val hostName: String, val terminal: Terminal, val stale: Boolean = false,
     val subAgents: List<ConsoleTerminal> = emptyList(), val spaceName: String? = null, val tabName: String? = null)
-data class HostWorkspace(val hostId: String, val hostName: String, val spaces: List<Space>, val error: HcError?, val staleTerminalIds: Set<String> = emptySet())
+data class HostWorkspace(val hostId: String, val hostName: String, val spaces: List<Space>, val error: HcError?, val staleTerminalIds: Set<String> = emptySet(), val renameableSpaceIds: Set<String> = emptySet())
 data class TrustRequest(val host: SavedHost, val fingerprint: String, val answer: CompletableDeferred<Boolean>)
 
 /** One instance per Application. Each host has one SSH client and event store. */
@@ -82,7 +82,8 @@ class HostConnections(private val repository: HostsRepository, parentScope: Coro
     private fun publish() {
         checkMain()
         mutableWorkspaces.value = entries.values.map { HostWorkspace(it.host.id, it.host.name, it.workspace.spaces.value, it.workspace.error.value,
-            it.store.staleTerminals.value.map { terminal -> terminal.id }.toSet()) }
+            it.store.staleTerminals.value.map { terminal -> terminal.id }.toSet(),
+            it.workspace.spaces.value.filter { space -> it.workspace.canRename(space.id) }.map { space -> space.id }.toSet()) }
         mutableStatuses.value = entries.values.map { HostStatus(it.host, it.client.state.value) }
         mutableTerminals.value = entries.values.flatMap { entry ->
             consoleRows(entry.host.id, entry.host.name, entry.client.state.value,
@@ -100,6 +101,7 @@ class HostConnections(private val repository: HostsRepository, parentScope: Coro
         }
     }
     @MainThread
+    fun workspace(id: String): WorkspaceStore? { checkMain(); return entries[id]?.workspace }
     fun client(id: String): HcClient? { checkMain(); return entries[id]?.client }
     fun answerTrust(request: TrustRequest, accept: Boolean) {
         if (mutableTrust.value === request) request.answer.complete(accept)

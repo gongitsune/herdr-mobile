@@ -20,3 +20,10 @@ fun terminalErrorMessage(error: HcError): String = when (error.kind) {
     "input_overflow" -> stringResource(R.string.terminal_input_overflow)
     else -> stringResource(R.string.terminal_error_kind, error.kind)
 }
+
+internal fun renameErrorResource(kind: String): Int = when (kind) {
+    "conflict" -> R.string.rename_conflict
+    "not_in_layout" -> R.string.rename_not_in_layout
+    "disconnected", "io", "not_connected", "not_running" -> R.string.rename_disconnected
+    else -> R.string.rename_failed
+}

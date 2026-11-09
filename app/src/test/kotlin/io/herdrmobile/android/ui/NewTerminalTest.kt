@@ -22,12 +22,32 @@ class NewTerminalTest {
             assertEquals("mac", params["on"]?.jsonPrimitive?.content)
             assertEquals(true, params["keep"]?.jsonPrimitive?.boolean)
             assertEquals("xterm-256color", params["env"]?.jsonObject?.get("TERM")?.jsonPrimitive?.content)
+            assertEquals("truecolor", params["env"]!!.jsonObject["COLORTERM"]!!.jsonPrimitive.content)
+            assertEquals("herdr", params["env"]!!.jsonObject["TERM_PROGRAM"]!!.jsonPrimitive.content)
             assertEquals("sp1", params["labels"]?.jsonObject?.get("herdr.space")?.jsonPrimitive?.content)
             assertTrue(params["labels"]!!.jsonObject["herdr.tab"]!!.jsonPrimitive.content.matches(Regex("tb[0-9a-f]{32}")))
             if (choice == 3) { assertEquals("printf 'hello'", params["line"]?.jsonPrimitive?.content); assertNull(params["argv"]) }
             else assertNotNull(params["argv"])
         }
         assertNotEquals(freshTabId(), freshTabId())
+    }
+    @Test fun newSpaceUsesFreshDesktopLabelsAndDefaultsToHome() {
+        val first = freshSpaceId()
+        assertTrue(first.matches(Regex("sp[0-9a-f]{32}")))
+        assertNotEquals(first, freshSpaceId())
+        for (choice in 0..2) {
+            val params = newTerminalParams(Space(first, "", expandHomeFolder("", "/home/remote"), emptyList()), choice, "")
+            assertEquals("/home/remote", params["cwd"]?.jsonPrimitive?.content)
+            assertEquals(first, params["labels"]!!.jsonObject["herdr.space"]!!.jsonPrimitive.content)
+            assertEquals("0", params["labels"]!!.jsonObject["herdr.seen"]!!.jsonPrimitive.content)
+        }
+    }
+    @Test fun homeFolderExpansionPreservesLiteralPaths() {
+        for (folder in listOf("", "  ", "~")) assertEquals("/home/remote", expandHomeFolder(folder, "/home/remote"))
+        assertEquals("/home/remote/project with spaces", expandHomeFolder(" ~/project with spaces ", "/home/remote"))
+        assertEquals("/tmp/work", expandHomeFolder("/tmp/work", "/home/remote"))
+        assertEquals("relative", expandHomeFolder("relative", "/home/remote"))
+        assertEquals("/project", expandHomeFolder("~/project", "/"))
     }
     @Test fun agentsLoadHostLoginPathAndLeaveInteractiveShell() {
         for ((choice, agent) in listOf(1 to "claude", 2 to "codex")) {

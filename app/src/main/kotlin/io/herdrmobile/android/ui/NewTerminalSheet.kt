@@ -28,6 +28,8 @@ internal fun newTabLabels(space: Space, tabId: String): Map<String, String> = ma
     "herdr.tab" to tabId, "herdr.seen" to "0",
 )
 
+internal fun freshSpaceId(): String = "sp" + UUID.randomUUID().toString().replace("-", "")
+
 internal fun freshTabId(): String = "tb" + UUID.randomUUID().toString().replace("-", "")
 
 // Resolve the shell on the target host and load its login PATH before launching.
@@ -45,18 +47,19 @@ internal fun newTerminalArgv(choice: Int): List<String> = when (choice) {
 
 internal fun newTerminalParams(space: Space, choice: Int, command: String): JsonObject = buildJsonObject {
     space.machine?.let { put("on", it) }
-    put("cwd", space.cwd)
+    if (space.cwd.isNotBlank()) put("cwd", space.cwd)
     if (choice == 3) put("line", command)
     else put("argv", JsonArray(newTerminalArgv(choice).map(::JsonPrimitive)))
     put("keep", true)
-    put("env", buildJsonObject { put("TERM", "xterm-256color") })
+    put("env", buildJsonObject { put("TERM", "xterm-256color"); put("COLORTERM", "truecolor"); put("TERM_PROGRAM", "herdr") })
     put("labels", JsonObject(newTabLabels(space, freshTabId()).mapValues { JsonPrimitive(it.value) }))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NewTerminalSheet(connections: HostConnections, host: String, space: Space, dismiss: () -> Unit, opened: (String) -> Unit) {
+fun NewTerminalSheet(connections: HostConnections, host: String, space: Space, dismiss: () -> Unit, opened: (String) -> Unit, shellOnly: Boolean = false, newSpace: Boolean = false) {
     var choice by remember { mutableIntStateOf(-1) }
+    var folder by remember { mutableStateOf("") }
     var command by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<io.herdrmobile.core.rpc.HcError?>(null) }
@@ -70,7 +73,8 @@ fun NewTerminalSheet(connections: HostConnections, host: String, space: Space, d
         scope.launch {
             try {
                 val client = checkNotNull(connections.client(host))
-                val params = newTerminalParams(space, index, command)
+                val cwd = resolveTerminalFolder(client, if (newSpace) folder else space.cwd, space.machine)
+                val params = newTerminalParams(space.copy(cwd = cwd), index, command)
                 val terminal = HcJson.decodeFromJsonElement<Terminal>(client.call("terminal.run", params))
                 opened(terminal.id)
             } catch (e: CancellationException) { throw e }
@@ -78,12 +82,16 @@ fun NewTerminalSheet(connections: HostConnections, host: String, space: Space, d
             finally { busy = false }
         }
     }
+    LaunchedEffect(shellOnly) { if (shellOnly) create(0) }
     ModalBottomSheet(sheetState = sheetState, onDismissRequest = { if (!busy) dismiss() }) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.new_terminal), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(if (newSpace) R.string.new_space else R.string.new_agent_tab), style = MaterialTheme.typography.titleMedium)
+            if (newSpace) OutlinedTextField(folder, { folder = it }, enabled = !busy, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text(stringResource(R.string.space_folder)) }, placeholder = { Text(stringResource(R.string.home_folder)) })
+            if (shellOnly && busy) CircularProgressIndicator(Modifier.padding(16.dp))
+            if (shellOnly && !busy && error != null) TextButton(onClick = { create(0) }) { Text(stringResource(R.string.retry)) }
             val icons = listOf(Icons.Default.Terminal, Icons.Default.AutoAwesome, Icons.Default.Code, Icons.Default.Edit)
             listOf(R.string.new_shell, R.string.new_claude, R.string.new_codex, R.string.new_command).forEachIndexed { index, label ->
-                Row(
+                if ((!shellOnly && (newSpace || index != 0)) && (!newSpace || index != 3)) Row(
                     Modifier.fillMaxWidth().clickable(enabled = !busy) {
                         if (index == 3) { choice = index; error = null } else create(index)
                     }.padding(vertical = 14.dp, horizontal = 8.dp),
@@ -107,7 +115,35 @@ fun NewTerminalSheet(connections: HostConnections, host: String, space: Space, d
                     }
                 },
             )
+            TextButton(onClick = dismiss, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.cancel)) }
             error?.let { Text(terminalErrorMessage(it), color = MaterialTheme.colorScheme.error) }
         }
     }
+}
+
+internal fun expandHomeFolder(folder: String, home: String): String {
+    val path = folder.trim()
+    return when {
+        path.isEmpty() || path == "~" -> home
+        path.startsWith("~/") -> home.trimEnd('/') + path.drop(1)
+        else -> path
+    }
+}
+
+internal suspend fun resolveTerminalFolder(client: io.herdrmobile.core.HcClient, folder: String, machine: String?): String {
+    val path = folder.trim()
+    if (path.isNotEmpty() && path != "~" && !path.startsWith("~/")) return path
+    // Mobile intentionally uses the SSH destination host’s $HOME, rather than the desktop app’s home.
+    // An explicit machine routes resolution to that machine instead.
+    val result = client.call("machine.exec", buildJsonObject {
+        put("argv", JsonArray(listOf("sh", "-c", "printf '%s' \"\$HOME\"").map(::JsonPrimitive)))
+        put("timeout", 5)
+        machine?.let { put("on", it) }
+    }).jsonObject
+    if (result["code"]?.jsonPrimitive?.intOrNull != 0 ||
+        result["timed_out"]?.jsonPrimitive?.booleanOrNull == true ||
+        result["truncated"]?.jsonPrimitive?.booleanOrNull == true) throw io.herdrmobile.core.rpc.HcError("io", "Cannot resolve home")
+    val home = java.util.Base64.getDecoder().decode(result["stdout"]!!.jsonPrimitive.content).decodeToString()
+    if (!home.startsWith("/")) throw io.herdrmobile.core.rpc.HcError("io", "Invalid home")
+    return expandHomeFolder(path, home)
 }
