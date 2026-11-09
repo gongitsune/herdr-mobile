@@ -14,7 +14,20 @@ class TerminalStore(private val client: HcClient, scope: CoroutineScope) {
     private val stale = MutableStateFlow<List<Terminal>>(emptyList())
     /** Last known records while disconnected or awaiting a new snapshot; cleared after snapshot. */
     val staleTerminals: StateFlow<List<Terminal>> = stale.asStateFlow()
-    internal val documentEpoch = MutableStateFlow(0L)
+    internal data class WorkspaceSnapshot(
+        val connection: CoreConnection? = null,
+        val records: List<Terminal> = emptyList(),
+        val documentEpoch: Long = 0,
+    )
+    internal val workspaceSnapshot = MutableStateFlow(WorkspaceSnapshot())
+    private var documentEpoch = 0L
+    private fun publishWorkspace() {
+        workspaceSnapshot.value = WorkspaceSnapshot(
+            snapshotConnection.value,
+            if (snapshotConnection.value == null) stale.value else mutable.value,
+            documentEpoch,
+        )
+    }
     internal val snapshotConnection = MutableStateFlow<CoreConnection?>(null)
     init {
         scope.launch {
@@ -22,6 +35,7 @@ class TerminalStore(private val client: HcClient, scope: CoroutineScope) {
                 snapshotConnection.value = null
                 if (mutable.value.isNotEmpty()) stale.value = mutable.value
                 mutable.value = emptyList()
+                publishWorkspace()
                 if (conn == null) return@collectLatest
                 var channel: Long? = null
                 try {
@@ -29,6 +43,7 @@ class TerminalStore(private val client: HcClient, scope: CoroutineScope) {
                     var seq = snapshot["seq"]!!.jsonPrimitive.long
                     replace(snapshot)
                     snapshotConnection.value = conn
+                    publishWorkspace()
                     val streamId = snapshot["channel"]!!.jsonPrimitive.long
                     channel = streamId
                     val line = ByteArrayOutputStream()
@@ -47,10 +62,11 @@ class TerminalStore(private val client: HcClient, scope: CoroutineScope) {
                                             val event=HcJson.decodeFromJsonElement<Event>(params)
                                             apply(event)
                                             if (event.type == "doc" && (event.data as? JsonObject)?.get("name")?.jsonPrimitive?.content == "herdr-app")
-                                                documentEpoch.value++
+                                                documentEpoch++
                                             seq = next
                                         }
                                     }
+                                    publishWorkspace()
                                 }
                                 line.reset()
                             } else {
@@ -74,7 +90,7 @@ class TerminalStore(private val client: HcClient, scope: CoroutineScope) {
     private fun replace(snapshot: JsonObject) {
         publish(HcJson.decodeFromJsonElement(snapshot["terminals"]!!))
         stale.value = emptyList()
-        documentEpoch.value++
+        documentEpoch++
     }
     private fun publish(values: List<Terminal>) { mutable.value = values.sortedWith(compareBy<Terminal> { it.priority }.thenBy { it.id }) }
     internal fun apply(event: Event) {

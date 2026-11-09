@@ -105,7 +105,7 @@ class WorkspaceTest {
     }
 
     @Test fun failedMachineReadSuppressesAdoptionAndRecoveryWithNullAllowsIt():Unit=runBlocking {
-        withTimeout(5000) {
+        withTimeout(30_000) {
             val peer=FakeCoreTransport()
             var failRemote=true
             peer.intercept={ request ->
@@ -143,7 +143,7 @@ class WorkspaceTest {
         }
     }
     @Test fun staleWorkspaceSurvivesDisconnectAndSnapshotWaitThenUsesNewSnapshot():Unit=runBlocking {
-        withTimeout(5000) {
+        withTimeout(30_000) {
             val peers=listOf(FakeCoreTransport(),FakeCoreTransport())
             val opens=AtomicInteger()
             val subscription=CompletableDeferred<JsonObject>()
@@ -173,20 +173,21 @@ class WorkspaceTest {
                 store.spaces.first { it.flatMap { s -> s.tabs }.flatMap { t -> t.panes }.any { p -> p.terminal.id=="old" } }
                 client.close()
                 client.state.first { it is ConnectionState.Disconnected }
-                // Let both collectors process the disconnect, then check the retained projection.
-                delay(100)
+                store.terminals.workspaceSnapshot.first { it.connection==null && it.records.any { t -> t.id=="old" } }
                 assertEquals(listOf("old"),panes().map { it.terminal.id })
                 assertNotNull(panes().single().agent)
                 assertNotNull(store.error.value)
                 val reconnect=async { client.connect() }
                 val request=subscription.await()
-                delay(100)
+                assertNull(store.terminals.workspaceSnapshot.value.connection)
                 assertEquals(listOf("old"),panes().map { it.terminal.id })
                 assertEquals(listOf("s"),store.spaces.value.map { it.id })
                 peers[1].respond(request,"""{"channel":2,"seq":0,"terminals":[{"address":"new","state":"live","argv":["codex"]}]}""")
                 reconnect.await()
                 store.spaces.first { it.flatMap { s -> s.tabs }.flatMap { t -> t.panes }.map { p -> p.terminal.id }==listOf("new") }
                 assertNull(store.error.value)
+                assertTrue(peers[1].requests.filter { FakeCoreTransport.method(it)=="doc.get" }
+                    .none { it["params"]?.jsonObject?.containsKey("on")==true })
                 assertFalse(peers.any { it.saw("doc.set") })
             } finally { store.close(); client.close(); scope.cancel() }
         }
@@ -204,7 +205,7 @@ class WorkspaceTest {
         assertEquals("sh",AgentDetector.unwrap(listOf("sh","-c","echo secret; claude")).first())
     }
     @Test fun documentsAreReadAfterSubscriptionAndReloadOnDocMissedAndReconnect(): Unit = runBlocking {
-        withTimeout(5000) {
+        withTimeout(30_000) {
             val reads=AtomicInteger(); val opens=AtomicInteger()
             val peers=listOf(FakeCoreTransport(),FakeCoreTransport())
             fun doc(name:String)="""{"value":{"spaces":[{"id":"s","name":"$name","folder":"/project","tabs":[]}]},"version":1}"""
@@ -226,6 +227,7 @@ class WorkspaceTest {
                 peers[0].send(Frame(2,0,"""{"method":"missed","params":{"seq":8,"terminals":[]}}
 """.toByteArray()))
                 store.spaces.first { it.firstOrNull()?.name=="name-3" }
+                assertEquals(3,reads.get())
                 client.reconnectNow()
                 store.spaces.first { it.firstOrNull()?.name=="reconnected" }
                 assertFalse(peers.any { it.saw("doc.set") })

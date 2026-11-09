@@ -12,7 +12,7 @@ import java.io.Closeable
 /** Read-only view of desktop organization. This class never calls doc.set or mutates labels. */
 class WorkspaceStore(private val client: HcClient, scope: CoroutineScope) : Closeable {
     private val owned=CoroutineScope(scope.coroutineContext+SupervisorJob(scope.coroutineContext[Job]))
-    private val terminals=TerminalStore(client,owned)
+    internal val terminals=TerminalStore(client,owned)
     // Keys contain only successful reads; JsonNull is an available, empty document.
     private val documents=MutableStateFlow<Map<String,JsonElement>>(emptyMap())
     private val mutable=MutableStateFlow<List<Space>>(emptyList())
@@ -22,25 +22,27 @@ class WorkspaceStore(private val client: HcClient, scope: CoroutineScope) : Clos
     private val readLock=Mutex()
     init {
         owned.launch {
-            combine(terminals.terminals,terminals.staleTerminals,terminals.snapshotConnection,documents) { records,stale,conn,docs ->
-                projectWorkspace(if(conn==null) stale else records,docs)
+            combine(terminals.workspaceSnapshot,documents) { snapshot,docs ->
+                projectWorkspace(snapshot.records,docs)
             }
                 .flowOn(Dispatchers.Default)
                 .collect { mutable.value=it }
         }
         owned.launch {
-            combine(terminals.snapshotConnection,terminals.documentEpoch,
-                terminals.terminals.map { list -> list.mapNotNull { machineOf(it.id) }.toSet() }.distinctUntilChanged()) { conn,_,_ -> conn }
-                .collectLatest { conn ->
+            terminals.workspaceSnapshot
+                .map { Triple(it.connection,it.documentEpoch,machines(it)) }
+                .distinctUntilChanged()
+                .collectLatest { (conn,_,_) ->
                     if(conn!=null) refresh()
                 }
         }
     }
     /** Refetches documents only after events.subscribe has installed its snapshot/receiver. */
     suspend fun refresh() = readLock.withLock {
-        val conn=terminals.snapshotConnection.value ?: return@withLock
+        val snapshot=terminals.workspaceSnapshot.value
+        val conn=snapshot.connection ?: return@withLock
         if(conn !== client.connection) return@withLock
-        val machines=listOf("")+terminals.terminals.value.mapNotNull { machineOf(it.id) }.distinct().sorted()
+        val machines=machines(snapshot)
         val next=linkedMapOf<String,JsonElement>()
         var failed: HcError?=null
         for(machine in machines) {
@@ -50,7 +52,15 @@ class WorkspaceStore(private val client: HcClient, scope: CoroutineScope) : Clos
             } catch(e:CancellationException) { throw e }
             catch(e:Exception) { failed=connectionError(e) }
         }
-        if(conn === client.connection) { documents.value=next; failure.value=failed }
+        val current=terminals.workspaceSnapshot.value
+        if(conn === client.connection && conn === current.connection &&
+            snapshot.documentEpoch == current.documentEpoch && machines == machines(current)) {
+            // Publish the outcome before documents can cause a new spaces projection.
+            failure.value=failed
+            documents.value=next
+        }
     }
+    private fun machines(snapshot: TerminalStore.WorkspaceSnapshot) =
+        listOf("")+snapshot.records.mapNotNull { machineOf(it.id) }.distinct().sorted()
     override fun close() { owned.cancel(); mutable.value=emptyList() }
 }
