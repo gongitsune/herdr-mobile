@@ -40,6 +40,7 @@ fun projectTurns(items: List<ChatItem>, running: Boolean): List<TimelineEntry> {
     fun flush(closed: Boolean, recordedEnd: Boolean = closed) { if (current.any { it !is ChatItem.TurnMarker }) raw += Raw(current.toList(), closed, recordedEnd); current.clear() }
     items.forEach { item ->
         when {
+            item is ChatItem.TurnMarker && item.id.startsWith("local-command:") -> { flush(true); raw += TimelineEntry.Notice(item) }
             item is ChatItem.UserMessage -> { flush(true); current += item }
             item is ChatItem.TurnMarker && item.label.lowercase() in setOf("turn complete", "turn interrupted") -> { current += item; flush(true) }
             item is ChatItem.TurnMarker && item.label.equals("Turn started", true) -> {

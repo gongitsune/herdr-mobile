@@ -6,6 +6,9 @@ import com.termux.view.TerminalView
 import io.herdrmobile.android.connection.HostConnections
 import io.herdrmobile.android.ui.asHcError
 import io.herdrmobile.core.*
+import io.herdrmobile.core.usage.*
+import io.herdrmobile.core.workspace.AgentDetector
+import io.herdrmobile.core.workspace.AgentKind
 import io.herdrmobile.core.model.Terminal
 import io.herdrmobile.core.transcript.*
 import io.herdrmobile.android.ui.chat.*
@@ -17,6 +20,80 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 class TerminalViewModel(private val connections: HostConnections, private val hostId: String, private val id: String) : ViewModel() {
+    val session = MutableStateFlow<SessionInfo?>(null)
+    val account = MutableStateFlow<ClaudeAccount?>(null)
+    val pendingModel = MutableStateFlow<AgentModel?>(null)
+    private var accountWatch: Job? = null
+    private var accountKey: Pair<HcClient, String?>? = null
+    private var pendingBaseModel: String? = null
+    private var pendingTimeout: Job? = null
+    private var confirmationWatch: Job? = null
+    val modelConfirmation = MutableStateFlow<String?>(null)
+    private fun clearPendingModel() {
+        pendingTimeout?.cancel(); pendingTimeout = null; pendingModel.value = null
+    }
+    private fun watchModelConfirmation() {
+        confirmationWatch?.cancel(); modelConfirmation.value = null
+        confirmationWatch = viewModelScope.launch {
+            val deadline = android.os.SystemClock.elapsedRealtime() + 5000
+            var detected = false
+            while (isActive) {
+                val model = modelSwitchConfirmation(remote?.screenText().orEmpty())
+                if (model != null) { detected = true; modelConfirmation.value = model }
+                else if (detected) { modelConfirmation.value = null; break }
+                if (!detected && android.os.SystemClock.elapsedRealtime() >= deadline) break
+                delay(100)
+            }
+        }
+    }
+    fun confirmModelSwitch(accept: Boolean) {
+        if (modelConfirmation.value == null || !ready.value || observe.value || busy.value) return
+        action {
+            checkNotNull(connections.client(hostId)).keys(id, listOf(if (accept) "Enter" else "Esc"))
+            if (!accept) clearPendingModel()
+            source?.nudge()
+        }
+    }
+    fun refreshAccount(force: Boolean = false) {
+        if (record.value?.let { AgentDetector.detect(it)?.kind } != AgentKind.CLAUDE_CODE) return
+        val machine = (transcriptState.value as? TranscriptState.Ready)?.binding?.machine
+            ?: id.substringBefore('/', "").takeIf { '/' in id }
+        val client = connections.client(hostId) ?: return
+        val store = connections.account(hostId) ?: return
+        if (accountKey != (client to machine)) {
+            accountKey = client to machine
+            accountWatch?.cancel(); account.value = null
+            accountWatch = viewModelScope.launch { store.account(machine).collect { account.value = it } }
+        }
+        viewModelScope.launch {
+            try { store.refresh(machine, force) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* Store retains the last successful result. */ }
+        }
+    }
+    fun canSwitchModel(): Boolean = connected.value && ready.value && !observe.value && !busy.value &&
+        record.value?.status?.state != "working" && activity.value?.running != true && !blocked.value &&
+        activeQuestion(chatItems.value, blocked.value) == null && modelConfirmation.value == null
+    fun switchModel(model: AgentModel? = null) {
+        if (!canSwitchModel()) return
+        val kind = record.value?.let { AgentDetector.detect(it)?.kind }
+        if (kind !in setOf(AgentKind.CLAUDE_CODE, AgentKind.CODEX)) return
+        if (kind == AgentKind.CLAUDE_CODE && model != null && model !in account.value?.models.orEmpty()) return
+        action {
+            val client = checkNotNull(connections.client(hostId))
+            val baseModel = session.value?.model
+            client.send(id, if (kind == AgentKind.CLAUDE_CODE && model != null) "/model ${model.value}" else "/model")
+            if (kind == AgentKind.CLAUDE_CODE && model != null) {
+                clearPendingModel()
+                pendingBaseModel = baseModel
+                pendingModel.value = model
+                pendingTimeout = viewModelScope.launch { delay(120_000); pendingModel.value = null }
+                if (pendingModelAcknowledged(baseModel, session.value?.model, pendingModel.value, session.value?.switchedTo)) clearPendingModel()
+                watchModelConfirmation()
+            } else selectedSurface.value = DetailSurface.TERMINAL
+            source?.nudge()
+        }
+    }
     val connected = MutableStateFlow(false)
     val record = MutableStateFlow<Terminal?>(null)
     val activity = MutableStateFlow<TurnActivity?>(null)
@@ -108,12 +185,15 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
                 ended.value = !recovering.value
             } }).also { it.start() }
     }
-    private fun stopStream() { generation++; remote?.dispose(); remote = null; ready.value = false }
+    private fun stopStream() { confirmationWatch?.cancel(); modelConfirmation.value = null; generation++; remote?.dispose(); remote = null; ready.value = false }
     fun unbind() {
         watch?.cancel(); watch = null; stopStream(); recovering.value = false; connected.value = false
         previewJob?.cancel(); sourceWatch?.cancel(); sourceWatch = null
         source?.close(); source = null; sourceClient = null
         activity.value = null
+        session.value = null; clearPendingModel()
+        confirmationWatch?.cancel(); confirmationWatch = null; modelConfirmation.value = null
+        accountWatch?.cancel(); accountWatch = null; accountKey = null; account.value = null
         transcriptState.value = null; chatItems.value = emptyList()
         candidate.value = null; candidatePreview.value = null; candidateError.value = null
     }
@@ -123,6 +203,10 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
         val transcript = TranscriptSource(client, id, viewModelScope)
         source = transcript
         sourceWatch = viewModelScope.launch {
+            launch { transcript.session.collect {
+                session.value = it
+                if (pendingModelAcknowledged(pendingBaseModel, it?.model, pendingModel.value, it?.switchedTo)) clearPendingModel()
+            } }
             combine(transcript.state, transcript.items, transcript.activity) { state, items, activity -> Triple(state, items, activity) }.collect { (state, items, turnActivity) ->
                 transcriptState.value = state; chatItems.value = visibleChatItems(state, items)
                 activity.value = turnActivity

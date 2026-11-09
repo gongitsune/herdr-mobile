@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ChatTurnsTest {
+    @Test fun localCommandStdoutIsANoticeWithOriginalLabel() {
+        val marker = ChatItem.TurnMarker("local-command:stdout", "Set model to Sonnet 5.5 and saved as your default for new sessions")
+        val entries = projectTurns(listOf(ChatItem.UserMessage("command", "/model sonnet"), marker, ChatItem.UserMessage("next", "Hello")), true)
+        assertEquals(3, entries.size)
+        assertEquals(marker, (entries[1] as TimelineEntry.Notice).marker)
+        assertEquals("notice:local-command:stdout", entries[1].id)
+        assertTrue(projectTurns(listOf(ChatItem.TurnMarker("local-command:reserved", "Turn complete")), false).single() is TimelineEntry.Notice)
+        assertEquals("command", (entries[0] as TimelineEntry.Turn).value.prompt?.id)
+        assertEquals("next", (entries[2] as TimelineEntry.Turn).value.prompt?.id)
+        assertTrue(projectTurns(listOf(ChatItem.TurnMarker("ordinary", marker.label)), false).isEmpty())
+    }
     private fun tool(id: String, verb: String? = "Ran", state: ToolState = ToolState.SUCCEEDED) = ChatItem.ToolCall(id, "exec_command", "./gradlew test", state = state, verb = verb, target = "./gradlew test", atEpochMs = 3000)
     @Test fun contiguousToolsAreGroupedWithoutReorderingNarration() {
         val runs = groupWork(listOf(tool("one"), tool("two"), ChatItem.AssistantText("words", "Checking the result"), tool("three")))

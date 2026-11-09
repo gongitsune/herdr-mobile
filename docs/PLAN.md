@@ -663,6 +663,91 @@ data class Space(..., val machine: String? = null, val explicitName: String = ""
 5. シートで pane の無いタブを押したら、空の Space を選んだ状態にする（何も起きないのを避ける）。
 6. 新しい Space のホームは、そのホスト（SSH 先）の `$HOME`。herdr-app はデスクトップのホームを使うが、モバイルの接続先はそのホストなのでこれで正しい（意図的な違い）。
 
+## Phase 9: 入力欄の下にモデル切り替え・コンテキスト使用量・セッション使用制限
+
+### 背景（ユーザー指摘 2026-11-09）
+「チャット UI の下部でモデル切り替え（Claude Code の Android アプリの UI を参考に）、コンテキスト使用量（%）、セッションの使用制限（%）を表示する」。
+
+### 調査結果（Claude 確認済み、claude 2.1.319 / codex-cli 0.167.0）
+- **Claude Code の会話ログ**：`type:"assistant"` の `message.model`（例 `claude-opus-5-5`。`<synthetic>` は無視）と `message.usage`
+  （`input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens` + `output_tokens` ＝ 今のコンテキストのトークン数）。
+  コンテキストの上限は会話ログに無い。
+- **Codex の rollout**：`turn_context.payload.model`（例 `gpt-6.1-sol`）。`event_msg` の `payload.type:"token_count"` に
+  `info.last_token_usage.total_tokens`、`info.model_context_window`、`rate_limits{limit_id:"codex", primary/secondary{used_percent, window_minutes, resets_at(秒)}, plan_type}`。
+  primary が 5 時間とは限らない（このホストでは 10080 分＝週のみ）。
+- **Claude Code の使用制限とモデル一覧**（Heeler `plugin/src/usage/claude-limits.js` と同じ方式。サインイン情報は読まない）：
+  `claude -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence --strict-mcp-config --settings '{"disableAllHooks":true}'`
+  を起動し、stdin に `{"type":"control_request","request_id":"init","request":{"subtype":"initialize"}}` →
+  `control_response` の `response.response.models`（`value` / `resolvedModel` / `displayName` / `description`）→
+  `{"type":"control_request","request_id":"usage","request":{"subtype":"get_usage","skip_behaviors":true}}` →
+  `response.response` の `rate_limits_available` / `subscription_type` / `rate_limits.five_hour|seven_day|seven_day_opus|seven_day_sonnet{utilization(%), resets_at(ISO)}`。
+  プロンプトは送らないので使用量は消費しない。終わったらプロセスグループごと SIGKILL。2.1.12 以前は get_usage に応答しないので 15 秒で打ち切る。
+
+### 公開 API（codex-a が先に入れる）
+```kotlin
+package io.herdrmobile.core.transcript
+data class ContextUsage(val usedTokens: Long, val windowTokens: Long, val usedPercent: Int)
+data class SessionInfo(val model: String?, val context: ContextUsage?, val limits: io.herdrmobile.core.usage.AgentLimits? = null)
+// TranscriptSource に追加
+val session: StateFlow<SessionInfo?>
+
+package io.herdrmobile.core.usage
+data class LimitWindow(val id: String, val usedPercent: Double, val windowMinutes: Int?, val resetsAtEpochMs: Long?)
+data class AgentLimits(val plan: String?, val windows: List<LimitWindow>, val observedAtEpochMs: Long) {
+    /** 300 分の窓。無ければ windowMinutes が最小の窓。期限切れ（resetsAt <= now）は除く */
+    fun session(nowMs: Long = System.currentTimeMillis()): LimitWindow?
+}
+data class AgentModel(val value: String, val resolvedModel: String?, val displayName: String, val description: String?)
+data class ClaudeAccount(val models: List<AgentModel>, val limits: AgentLimits?, val limitsUnavailable: String? = null)
+class ClaudeAccountStore(client: HcClient, scope: CoroutineScope) : java.io.Closeable {
+    fun account(on: String?): StateFlow<ClaudeAccount?>   // machine ごと。初回参照で取得
+    suspend fun refresh(on: String?, force: Boolean = false) // force でなければ 5 分以内の再取得はしない
+    override fun close()
+}
+```
+
+### codex-a（core-client）
+1. `SessionInfo` の投影（`TranscriptSource.session`）。items と同じ読み取りで更新し、値が変わったときだけ発行する。サブエージェント（sidechain）の行は使わない。
+   - Claude Code：最後の非 sidechain の assistant 行の model と usage。`windowTokens` は model が `[1m]` を含むか usedTokens が 200,000 を超えたら 1,000,000、それ以外 200,000。`usedPercent = round(used*100/window)`（0–100 に丸める）。`limits` は null（アカウント側で取る）。
+   - Codex：最新の `turn_context` の model、最新の `token_count` の info。`usedPercent` は Codex TUI と同じく基準 12,000 トークンを引いて計算：`effective = window-12000`、`used = max(0,total-12000)`、`usedPercent = 100 - round(max(0,effective-used)*100/effective)`（window<=12000 なら 100）。
+     `limits` は最新の `token_count.rate_limits`（`limit_id` が null か `"codex"` のものだけ）から作る。`resets_at` は秒→ms。
+   - 情報が無ければ各フィールドは null（推測しない）。
+2. `usage/ClaudeAccountStore`：上の方式を python3 の resource スクリプト（`discover.py` と同じ置き方）で `machine.exec` する。
+   - `claude` はログインシェルの PATH で探す（`sh -lc 'command -v claude'` 相当。herdr-app の起動と同じ見つけ方）。見つからなければ `limitsUnavailable="program_missing"`、models は空。
+   - スクリプトは **models と rate_limits の既知フィールドだけ**を JSON で返す（それ以外は持ち出さない）。cwd はホーム。全体のタイムアウト 20 秒。
+   - `rate_limits_available=false` は `limitsUnavailable="no_plan_limits"`、get_usage が Unsupported なら `"program_too_old"`（models は返す）。
+   - 結果は machine ごとに保持。5 分のスロットル（Heeler と同じ）。失敗しても前回の値を残す。
+3. フィクスチャで単体テスト（Claude/Codex の SessionInfo、Codex の 12k 基準、limit_id 違いの除外、session() の選択と期限切れ、スクリプト出力のパース）。結合テストは `herdr-mobile-it` で `ClaudeAccountStore.refresh` が models を返すこと（claude が無い環境では skip）。
+
+### codex-b（app）
+**入力欄の下の 1 行**（チャット表示のときだけ。ターミナル表示では出さない）。Claude Code Android アプリの入力欄下部に倣う：
+- 左：**モデルのチップ**（小さい tonal、`Opus 5.5 ⌄`）。表示名は ClaudeAccount.models の `resolvedModel` が一致すればその `displayName`、無ければ Ovis の `modelLabel` と同じ規則（`claude-<family>-<major>[-<minor>]` → `Opus 5.5`、`gpt-<ver>[-sol]` → `GPT-<ver>[-Sol]`、それ以外は id のまま等幅）。model が null ならチップに「モデル」。
+- 右：**コンテキスト** `◔ 45%`（小さい円形インジケーター＋数字）と **セッション** `⏱ 75%`（同じ形、ラベルは窓の長さ：300 分＝「セッション」、10080 分＝「週」、それ以外は「n 時間」）。80% 以上はステータス blocked の色。値が無い方は出さない。
+- 数字を押すと小さなボトムシート：コンテキスト「76k / 200k トークン（45%）」、各制限の窓ごとに「使用 75% · あと 1 時間 12 分でリセット」、プラン名。Claude Code は「更新」で `refresh(force=true)`。
+**モデルの切り替え**（チップを押す → ボトムシート「モデル」）：
+- Claude Code：ClaudeAccount.models を並べる（太字の displayName、下に薄く description、今のモデルにチェック。今のモデルは `resolvedModel == session.model` で判定、`default` 行より具体名の行を優先）。
+  選ぶと `terminal.send("/model <value>")` → Enter（`terminal.keys ["Enter"]`）。送れるのは、操作モードで working でも blocked でもなく質問カードも無いときだけ（それ以外は行を薄くし、「作業中は切り替えられません」を 1 行）。送ったら会話ログの次の model が来るまでチップは選んだ名前を仮表示する。models が空（取得失敗・claude が無い）ならシートに理由を 1 行と「ターミナルで /model」ボタン。
+- Codex：Codex の `/model` は引数を取らずピッカーを開くので、シートには今のモデルと「ターミナルで選ぶ」ボタンだけ（押すと `/model`＋Enter を送ってターミナル表示に切り替える。送れる条件は同上）。
+- その他のエージェント：チップは出さない。
+**取得のタイミング**：Claude Code のエージェント画面を開いたとき、およびモデルシート・使用量シートを開いたときに `ClaudeAccountStore.refresh(machine)`（スロットルは core 側）。画面を開いている間は 5 分ごと。ストアは接続（HostConnections）ごとに 1 つ。
+- 文字列は values / values-ja の両方。既存テスト・lint を通す。表示名とラベルの規則・セッション窓の選択は単体テストを書く。
+
+### Phase 9 エミュレータ確認の修正（Claude 2026-11-09）
+- 分かったこと：Claude Code の `/model <x>` は「Set model to `Sonnet 5.5` and saved as your default for new sessions」— **ユーザーの既定（~/.claude/settings.json の model）も書き換える**。会話ログには
+  `type:"user"` の `<command-name>/model</command-name><command-message>…</command-message><command-args>sonnet</command-args>`、
+  `<local-command-stdout>…</local-command-stdout>`、`isMeta:true` の `<local-command-caveat>…` が入る。
+- 公開 API 変更：`data class SessionInfo(val model: String?, val context: ContextUsage?, val limits: AgentLimits? = null, val switchedTo: String? = null)`
+  （`switchedTo` は最後の assistant 行より後にある最新の「Set model to `X`」の X。ANSI を除く。無ければ null）。
+
+**codex-a**
+1. Claude Code の会話ログ投影で、ローカルコマンドを生の XML で出さない：`<command-name>` 行は `ChatItem.UserMessage("/model sonnet")` のようにコマンド名＋引数の 1 行に、`<local-command-stdout>` は ANSI を除いた本文の `ChatItem.TurnMarker`（**id は `local-command:` で始める**。app はこの接頭辞で薄い 1 行の Notice として出す）に、`<local-command-caveat>` と `isMeta:true` の行は出さない。空の stdout は出さない。テストを追加。
+2. `SessionInfo.switchedTo`。テストを追加。
+
+**codex-b**
+1. チップの表示：pending → `switchedTo`（models の displayName と一致すればそれ）→ 今の model の順。pending は「base が非 null で、会話ログの model が base と違う値になった」か「switchedTo が pending の displayName と一致」か 2 分で消す（base が null のまま最初の model が来ただけでは消さない）。
+2. モデルのシートの見出しの下に 1 行「新しいセッションの既定にもなります（Claude Code の仕様）」。
+3. TurnMarker が local-command-stdout 由来の行（例「Set model to Sonnet 5.5 …」）を薄い 1 行で出すのを確認。
+
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。
 - codex-b: それ以外すべて（ルート Gradle 設定、`gradle/libs.versions.toml`、`app/**`、`third_party/**`）。

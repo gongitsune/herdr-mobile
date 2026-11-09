@@ -30,6 +30,8 @@ class TranscriptSource(
     val items:StateFlow<List<ChatItem>> = mutableItems.asStateFlow()
     private val mutableActivity=MutableStateFlow<TurnActivity?>(null)
     val activity:StateFlow<TurnActivity?> = mutableActivity.asStateFlow()
+    private val mutableSession=MutableStateFlow<SessionInfo?>(null)
+    val session:StateFlow<SessionInfo?> = mutableSession.asStateFlow()
     private val polling=TranscriptPolling(pollIntervalMs)
     private val wake=Channel<Unit>(Channel.CONFLATED)
     private val nudged=AtomicBoolean()
@@ -65,6 +67,7 @@ class TranscriptSource(
                         lastConnection=connection
                         if(connection==null || terminal==null) {
                             canFollow=false
+                            mutableSession.value=null
                             mutableActivity.value=null
                             mutableState.value=TranscriptState.Unavailable("Terminal is not connected")
                         }
@@ -100,6 +103,8 @@ class TranscriptSource(
                 val resolved=evidence.binding ?: chosen
                 if(resolved==null) {
                     canFollow=false
+                    mutableSession.value=null
+                    projectedRevision=-1
                     mutableActivity.value=null.withTerminal(terminal)
                     mutableState.value=TranscriptState.Unavailable(evidence.reason)
                     if(binding?.confirmed==true) { binding=null; mutableItems.value=emptyList() }
@@ -129,6 +134,14 @@ class TranscriptSource(
             // Status-only changes may hide/reveal questions. Unchanged polling does no JSON parsing.
             if(projectedRevision!=revision || projectedBlocked!=blocked) {
                 val rows=projectTranscript(current.kind,historyPrefix+lines,blocked)
+                if(projectedRevision!=revision) {
+                    val next=projectSession(current.kind,historyPrefix+lines)
+                    val previous=mutableSession.value?.limits
+                    // Appending unrelated lines must not change the observation time or emit a new value.
+                    mutableSession.value=if(next?.limits!=null && previous!=null &&
+                        next.limits.plan==previous.plan && next.limits.windows==previous.windows)
+                        next.copy(limits=previous) else next
+                }
                 currentCoroutineContext().ensureActive()
                 if(!owned.isActive) return@withLock
                 projectedActivity=turnActivity(rows)
@@ -141,6 +154,7 @@ class TranscriptSource(
         catch(e:Exception) { mutableState.value=TranscriptState.Failed(connectionError(e)) }
     } }
     private fun resetReader() {
+        mutableSession.value=null
         nextLine=1; checkpoint=null; bytes=0; lines.clear(); historyPrefix=emptyList()
         historyLoaded=false; historyComplete=true; historyBytes=0; lastTail=null
         projectedActivity=null; revision++
@@ -212,5 +226,5 @@ class TranscriptSource(
         }
         refresh()
     }
-    override fun close() { owned.cancel(); mutableActivity.value=null }
+    override fun close() { owned.cancel(); mutableActivity.value=null; mutableSession.value=null }
 }

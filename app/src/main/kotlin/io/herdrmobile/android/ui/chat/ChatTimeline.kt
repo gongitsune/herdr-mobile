@@ -28,7 +28,7 @@ fun ChatTimeline(items: List<ChatItem>, blocked: Boolean,
     LazyColumn(modifier, state = scroll, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (entries.isEmpty() && !loading) item { Text(stringResource(R.string.chat_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(entries, key = { it.id }) { entry -> when (entry) {
-            is TimelineEntry.Notice -> Text(stringResource(if (entry.marker.label == "Context compacted") R.string.context_compacted else R.string.history_missing), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            is TimelineEntry.Notice -> Text(if (entry.marker.id.startsWith("local-command:")) entry.marker.label else stringResource(if (entry.marker.label == "Context compacted") R.string.context_compacted else R.string.history_missing), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             is TimelineEntry.Turn -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 val turn = entry.value
                 turn.prompt?.let { prompt -> UserBubble(prompt.text) }

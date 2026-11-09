@@ -96,6 +96,10 @@ class RemoteTerminalSession(
         val modifiers = (if (control) com.termux.terminal.KeyHandler.KEYMOD_CTRL else 0) or (if (alt) com.termux.terminal.KeyHandler.KEYMOD_ALT else 0) or (if (shift) com.termux.terminal.KeyHandler.KEYMOD_SHIFT else 0)
         if (active && !observe) view.handleKeyCode(code, modifiers)
     }
+    /** Visible screen only: old dialogs in scrollback must not keep cards open. */
+    fun screenText(): String = terminal.emulator?.let {
+        it.getSelectedText(0, 0, it.mColumns - 1, it.mRows - 1)
+    }.orEmpty()
     fun write(text: String) { terminal.write(text) }
     fun dispose() { active = false; ready(false); inputs.close(); job?.cancel() }
 }

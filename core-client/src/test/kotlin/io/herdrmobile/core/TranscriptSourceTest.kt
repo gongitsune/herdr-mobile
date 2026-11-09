@@ -187,6 +187,33 @@ class TranscriptSourceTest {
         }
     }
 
+    @Test fun sessionUpdatesWithReadsAndClearsAfterTruncation():Unit=runBlocking {
+        withTimeout(6000) {
+            val usage=answer.replace("\"id\":\"m\",", "\"id\":\"m\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":90000},")
+            val peer=TranscriptPeer(user+"\n"+usage+"\n")
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+            val source=TranscriptSource(client,"t1",scope,20)
+            try {
+                client.connect()
+                val initial=source.session.first { it!=null }
+                assertEquals(ContextUsage(90000,200000,45),initial!!.context)
+                peer.text.updateAndGet { it+"{}\n" }
+                source.refresh()
+                assertSame(initial,source.session.value)
+                peer.exact=false
+                source.refresh()
+                assertNull(source.session.value)
+                peer.exact=true
+                source.refresh()
+                assertEquals(initial,source.session.value)
+                peer.text.set(user+"\n")
+                source.refresh()
+                assertNull(source.session.value)
+            } finally { source.close(); client.close(); scope.cancel() }
+        }
+    }
+
     private fun initialRows(kind:AgentKind):List<String> = if(kind==AgentKind.CLAUDE_CODE) listOf(
         user.dropLast(1)+",\"timestamp\":\"2030-01-01T00:00:00Z\"}"
     ) else listOf(

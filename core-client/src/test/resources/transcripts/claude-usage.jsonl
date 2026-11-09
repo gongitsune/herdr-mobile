@@ -1,0 +1,3 @@
+{"type":"assistant","message":{"model":"claude-opus-5-5","usage":{"input_tokens":1000,"cache_creation_input_tokens":10000,"cache_read_input_tokens":78000,"output_tokens":1000}}}
+{"type":"assistant","isSidechain":true,"message":{"model":"wrong","usage":{"input_tokens":999999}}}
+{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0}}}

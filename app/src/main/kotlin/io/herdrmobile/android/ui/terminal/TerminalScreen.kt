@@ -29,6 +29,7 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
     val recovering by vm.recovering.collectAsStateWithLifecycle()
     val ended by vm.ended.collectAsStateWithLifecycle()
     val ready by vm.ready.collectAsStateWithLifecycle()
+    val modelConfirmation by vm.modelConfirmation.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
     val cooldown by vm.stopCoolingDown.collectAsStateWithLifecycle()
     val choiceError by vm.choiceError.collectAsStateWithLifecycle()
@@ -40,6 +41,9 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
     val transcript by vm.transcriptState.collectAsStateWithLifecycle()
     val selected by vm.selectedSurface.collectAsStateWithLifecycle()
     val blocked by vm.blocked.collectAsStateWithLifecycle()
+    LaunchedEffect(vm, connected, record?.foreground, (transcript as? io.herdrmobile.core.transcript.TranscriptState.Ready)?.binding?.machine) {
+        while (true) { if (connected) vm.refreshAccount(); kotlinx.coroutines.delay(300_000) }
+    }
     val surface = detailSurface(selected, chatItems)
     val unavailable = transcript is io.herdrmobile.core.transcript.TranscriptState.Unavailable || transcript is io.herdrmobile.core.transcript.TranscriptState.Failed
     val showTerminal = surface == DetailSurface.TERMINAL || unavailable
@@ -78,13 +82,15 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
             Column(Modifier.imePadding().navigationBarsPadding()) {
                 if (showTerminal) TerminalKeys(vm, ready && !observe)
                 else {
-                    question?.let { QuestionCard(it, ready && !observe && !busy, vm::choose) }
+                    if (modelConfirmation != null) ModelSwitchCard(modelConfirmation!!, ready && !observe && !busy, vm::confirmModelSwitch)
+                    else question?.let { QuestionCard(it, ready && !observe && !busy, vm::choose) }
                     TextField(draft, { vm.draft.value = it; vm.choiceError.value = null }, modifier = Modifier.fillMaxWidth().padding(8.dp).heightIn(min = 96.dp), enabled = !observe,
                         placeholder = { Text(if (question != null) stringResource(R.string.choose_number, question.options.size) else stringResource(R.string.message_agent, title)) }, maxLines = 4, shape = RoundedCornerShape(24.dp),
                         colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
                         trailingIcon = { FilledIconButton(enabled = ready && !observe && !busy && (draft.isNotBlank() || canStop), onClick = { if (draft.isBlank() && canStop) vm.stopWorking() else vm.send() }, modifier = Modifier.padding(end = 8.dp)) {
                             Icon(if (draft.isBlank() && canStop) Icons.Default.Stop else Icons.Default.ArrowUpward, stringResource(if (draft.isBlank() && canStop) R.string.interrupt else R.string.send))
                         } })
+                    SessionControls(vm)
                     if (choiceError != null && question != null) Text(if (choiceError == ChoiceError.MANUAL) stringResource(R.string.choice_manual) else stringResource(R.string.invalid_choice, question.options.size), Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
                 }
             }
@@ -151,6 +157,20 @@ private fun TerminalKeys(vm: TerminalViewModel, enabled: Boolean) {
         if (expanded) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
             listOf(Triple(KeyEvent.KEYCODE_DPAD_UP, Icons.Default.ArrowUpward, R.string.up), Triple(KeyEvent.KEYCODE_DPAD_DOWN, Icons.Default.ArrowDownward, R.string.down), Triple(KeyEvent.KEYCODE_DPAD_LEFT, Icons.AutoMirrored.Filled.ArrowBack, R.string.left), Triple(KeyEvent.KEYCODE_DPAD_RIGHT, Icons.AutoMirrored.Filled.ArrowForward, R.string.right)).forEach { (code, icon, label) ->
                 IconButton(enabled = enabled, onClick = { vm.keyCode(code) }) { Icon(icon, stringResource(label), Modifier.size(18.dp)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelSwitchCard(model: String, enabled: Boolean, choose: (Boolean) -> Unit) {
+    Surface(Modifier.fillMaxWidth().padding(horizontal = 8.dp), shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(stringResource(R.string.model_switch_confirm, model))
+            Text(stringResource(R.string.model_switch_cost), style = MaterialTheme.typography.bodySmall)
+            Row {
+                TextButton(enabled = enabled, onClick = { choose(true) }) { Text(stringResource(R.string.model_switch_accept)) }
+                TextButton(enabled = enabled, onClick = { choose(false) }) { Text(stringResource(R.string.model_switch_cancel)) }
             }
         }
     }

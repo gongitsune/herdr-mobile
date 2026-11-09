@@ -1,0 +1,3 @@
+{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":62000},"model_context_window":112000},"rate_limits":{"limit_id":"codex","plan_type":"plus","primary":{"used_percent":75.5,"window_minutes":10080,"resets_at":2000000000}}}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":62000},"model_context_window":112000},"rate_limits":{"limit_id":"other","primary":{"used_percent":99,"window_minutes":300}}}}

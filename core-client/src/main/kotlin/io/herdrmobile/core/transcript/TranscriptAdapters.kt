@@ -84,7 +84,21 @@ private fun projectClaude(all:List<JsonObject>,blocked:Boolean):List<ChatItem> {
         val uuid=r.text("uuid"); val type=r.text("type"); val message=r["message"].obj(); val content=message["content"]
         if(type=="user" && !r.flag("isMeta") && !r.flag("isCompactSummary")) {
             val text=contentText(content)
-            if(text.isNotBlank() && !text.startsWith("[Request interrupted")) output[uuid]=ChatItem.UserMessage(uuid,text,atEpochMs)
+            val stdout=localCommandTag(text,"local-command-stdout")
+            val command=localCommandTag(text,"command-name")
+            when {
+                text.contains("<local-command-caveat>") -> Unit
+                stdout!=null -> withoutAnsi(stdout).trim().takeIf { it.isNotBlank() }?.let {
+                    val id="local-command:$uuid"
+                    output[id]=ChatItem.TurnMarker(id,it,atEpochMs)
+                }
+                command!=null -> {
+                    val line=listOf(command,localCommandTag(text,"command-args").orEmpty())
+                        .joinToString(" ").replace(Regex("\\s+")," ").trim()
+                    if(line.isNotBlank()) output[uuid]=ChatItem.UserMessage(uuid,line,atEpochMs)
+                }
+                text.isNotBlank() && !text.startsWith("[Request interrupted") -> output[uuid]=ChatItem.UserMessage(uuid,text,atEpochMs)
+            }
         }
         if(type=="assistant") content.arr().forEachIndexed { index,value ->
             val block=value.obj()
