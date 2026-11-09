@@ -37,6 +37,19 @@ internal fun normalizeCodexDisplay(text:String):String = Normalizer.normalize(te
     .replace(Regex("\\u001B\\[[0-?]*[ -/]*[@-~]"),"")
     .replace(Regex("[\\p{P}\\p{S}]"),"").replace(Regex("\\s+")," ").trim()
 
+internal fun codexScreenNotStarted(screen:String):Boolean {
+    val plain=screen.replace(Regex("\\u001B\\[[0-?]*[ -/]*[@-~]"),"")
+    val header=plain.lastIndexOf("OpenAI Codex (v")
+    if(header<0) return false // Missing/truncated screens cannot prove a fresh TUI.
+    val shown=plain.substring(header)
+    if(Regex("Worked for",RegexOption.IGNORE_CASE).containsMatchIn(shown)) return false
+    if(Regex("(?m)^\\s*•\\s").containsMatchIn(shown)) return false
+    val prompts=shown.lineSequence().map { it.trim() }.filter { it.startsWith("›") }.toList()
+    // Only the empty composer or its known placeholder is unambiguously unsent.
+    // Other text could be either a draft or a submitted prompt, so stay conservative.
+    return prompts.size==1 && prompts.single().removePrefix("›").trim() in setOf("","Ask Codex to do anything")
+}
+
 internal fun matchCodexScreen(screen:String,candidates:List<CodexScreenTranscript>):String? {
     val shown=screen.substring(maxOf(0,screen.lastIndexOf("OpenAI Codex (v")))
     // Prompt/tool text cannot prove ownership of an assistant answer.

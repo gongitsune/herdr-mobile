@@ -4,16 +4,18 @@ import os
 import selectors
 import signal
 import subprocess
+import sys
 import time
 
 WINDOWS = ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet")
 
 
-def exchange():
-    result = {"models": []}
+def exchange(mode="account", cwd=None):
+    commands_mode = mode == "commands"
+    result = {"commands": []} if commands_mode else {"models": []}
     child = None
     lookup = None
-    deadline = time.monotonic() + 19
+    deadline = time.monotonic() + (15 if commands_mode else 19)
 
     def terminate(process):
         if process is not None:
@@ -42,7 +44,7 @@ def exchange():
              "--verbose", "--no-session-persistence", "--strict-mcp-config",
              "--settings", '{"disableAllHooks":true}'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            cwd=os.path.expanduser("~"), start_new_session=True)
+            cwd=cwd if commands_mode else os.path.expanduser("~"), start_new_session=True)
         stage = "init"
         send(stage, {"subtype": "initialize"})
         request_deadline = min(deadline, time.monotonic() + 15)
@@ -83,6 +85,16 @@ def exchange():
                         result["error"] = "invalid_response"
                         return result
                     if stage == "init":
+                        if commands_mode:
+                            commands = body.get("commands")
+                            if not isinstance(commands, list):
+                                result["error"] = "invalid_response"
+                            else:
+                                result["commands"] = [
+                                    {key: command[key] for key in ("name", "description", "argumentHint", "builtin")
+                                     if key in command and isinstance(command[key], bool if key == "builtin" else str)}
+                                    for command in commands if isinstance(command, dict)]
+                            return result
                         models = body.get("models")
                         if isinstance(models, list):
                             result["models"] = [
@@ -114,4 +126,9 @@ def exchange():
 
 
 if __name__ == "__main__":
-    print(json.dumps(exchange(), allow_nan=False))
+    if len(sys.argv) > 1:
+        if len(sys.argv) != 3 or sys.argv[1] != "commands":
+            raise SystemExit(2)
+        print(json.dumps(exchange("commands", sys.argv[2]), allow_nan=False))
+    else:
+        print(json.dumps(exchange(), allow_nan=False))

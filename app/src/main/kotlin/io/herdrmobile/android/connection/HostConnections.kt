@@ -6,6 +6,7 @@ import io.herdrmobile.android.HostsRepository
 import io.herdrmobile.android.SavedHost
 import io.herdrmobile.core.*
 import io.herdrmobile.core.usage.ClaudeAccountStore
+import io.herdrmobile.core.usage.AgentCommandStore
 import io.herdrmobile.core.model.Terminal
 import io.herdrmobile.core.workspace.WorkspaceStore
 import io.herdrmobile.core.workspace.Space
@@ -25,7 +26,7 @@ data class TrustRequest(val host: SavedHost, val fingerprint: String, val answer
 class HostConnections(private val repository: HostsRepository, parentScope: CoroutineScope) {
     private val scope = CoroutineScope(parentScope.coroutineContext + Dispatchers.Main.immediate)
     private fun checkMain() = check(Looper.myLooper() == Looper.getMainLooper()) { "HostConnections entries require Main" }
-    private class Entry(var host: SavedHost, val scope: CoroutineScope, val client: HcClient, val store: TerminalStore, val workspace: WorkspaceStore, val account: ClaudeAccountStore)
+    private class Entry(var host: SavedHost, val scope: CoroutineScope, val client: HcClient, val store: TerminalStore, val workspace: WorkspaceStore, val account: ClaudeAccountStore, val commands: AgentCommandStore)
     private val entries = mutableMapOf<String, Entry>()
     private val mutableStatuses = MutableStateFlow<List<HostStatus>>(emptyList())
     val statuses = mutableStatuses.asStateFlow()
@@ -71,7 +72,7 @@ class HostConnections(private val repository: HostsRepository, parentScope: Coro
                 }
             }.open()
         }, child)
-        val entry = Entry(host, child, client, TerminalStore(client, child), WorkspaceStore(client, child), ClaudeAccountStore(client, child))
+        val entry = Entry(host, child, client, TerminalStore(client, child), WorkspaceStore(client, child), ClaudeAccountStore(client, child), AgentCommandStore(client, child))
         entries[host.id] = entry
         child.launch { client.state.collect { publish() } }
         child.launch { entry.store.terminals.collect { publish() } }
@@ -91,7 +92,7 @@ class HostConnections(private val repository: HostsRepository, parentScope: Coro
                 entry.store.terminals.value, entry.store.staleTerminals.value)
         }.sortedWith(compareBy<ConsoleTerminal> { it.terminal.priority }.thenBy { it.hostName }.thenBy { it.terminal.id })
     }
-    private fun remove(id: String) { checkMain(); entries.remove(id)?.let { it.account.close(); it.workspace.close(); it.client.close(); it.scope.cancel() } }
+    private fun remove(id: String) { checkMain(); entries.remove(id)?.let { it.commands.close(); it.account.close(); it.workspace.close(); it.client.close(); it.scope.cancel() } }
     fun reconnect(id: String) {
         scope.launch {
             checkMain()
@@ -104,6 +105,7 @@ class HostConnections(private val repository: HostsRepository, parentScope: Coro
     @MainThread
     fun workspace(id: String): WorkspaceStore? { checkMain(); return entries[id]?.workspace }
     fun account(id: String): ClaudeAccountStore? { checkMain(); return entries[id]?.account }
+    fun commands(id: String): AgentCommandStore? { checkMain(); return entries[id]?.commands }
     fun client(id: String): HcClient? { checkMain(); return entries[id]?.client }
     fun answerTrust(request: TrustRequest, accept: Boolean) {
         if (mutableTrust.value === request) request.answer.complete(accept)

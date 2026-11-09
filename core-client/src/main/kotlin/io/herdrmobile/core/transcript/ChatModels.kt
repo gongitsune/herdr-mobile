@@ -21,6 +21,8 @@ data class TranscriptBinding(val kind:AgentKind,val sessionId:String,val path:St
 data class TranscriptCandidate(val kind:AgentKind,val sessionId:String,val path:String,val processKey:String,val machine:String?=null)
 sealed interface TranscriptState {
     data object Loading:TranscriptState
+    /** The agent is verified, but its conversation has not started yet. */
+    data class NotStarted(val kind:AgentKind):TranscriptState
     data class Ready(val binding:TranscriptBinding,val complete:Boolean):TranscriptState
     data class Unavailable(val reason:String,val candidates:List<TranscriptCandidate> = emptyList()):TranscriptState
     data class Failed(val error:HcError):TranscriptState

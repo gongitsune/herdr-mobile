@@ -8,7 +8,8 @@ import io.herdrmobile.core.workspace.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.*
 
-internal data class SessionEvidence(val processKey:String,val binding:TranscriptBinding?,val candidates:List<TranscriptCandidate>,val reason:String)
+internal data class SessionEvidence(val processKey:String,val binding:TranscriptBinding?,val candidates:List<TranscriptCandidate>,val reason:String,
+                                    val notStarted:AgentKind?=null)
 internal class SessionResolver(private val client:HcClient) {
     private val storeScript=checkNotNull(javaClass.getResourceAsStream("/io/herdrmobile/core/transcript/codex_store.py")).bufferedReader().use { it.readText() }
     private val retained=mutableMapOf<String,Pair<TranscriptBinding,Long>>()
@@ -32,9 +33,12 @@ internal class SessionResolver(private val client:HcClient) {
             catch(e:CancellationException) { throw e } catch(_:HcError) { null }
         }
         var binding:TranscriptBinding?=null
+        var notStarted:AgentKind?=null
+        var screen:String?=null
         if(kind==AgentKind.CLAUDE_CODE) {
             val exact=info["binding"].obj(); val id=exact.text("session_id"); val path=exact.text("path")
-            if(id.isNotBlank() && path.isNotBlank()) {
+            if(info.flag("not_started")) notStarted=kind
+            else if(id.isNotBlank() && path.isNotBlank()) {
                 val heads=try { parseLines(client.readChunk(path,offset=1,limit=32,on=machine).text.lineSequence().toList()) }
                     catch(e:CancellationException) { throw e } catch(_:HcError) { emptyList() }
                 val head=heads.firstOrNull { it.text("sessionId").isNotBlank() }
@@ -84,7 +88,10 @@ internal class SessionResolver(private val client:HcClient) {
                     } catch(e:CancellationException) { throw e } catch(_:HcError) { }
                 }
                 // An unread competitor may own the displayed answer; never match an incomplete inventory.
-                val screenPath=if(stored.isNotEmpty() && transcripts.size==stored.size) matchCodexScreen(client.read(terminal.id),transcripts) else null
+                val screenPath=if(stored.isNotEmpty() && transcripts.size==stored.size) {
+                    screen=client.read(terminal.id)
+                    matchCodexScreen(checkNotNull(screen),transcripts)
+                } else null
                 var chosen=stored.singleOrNull { it.text("path")==screenPath }
                 if(chosen==null) {
                     val started=info["process_started_ms"]?.jsonPrimitive?.longOrNull
@@ -106,6 +113,12 @@ internal class SessionResolver(private val client:HcClient) {
             }
             binding?.let { retained[terminal.id]=it to newest }
             if(binding==null) retained.remove(terminal.id)
+            if(binding==null && info.flag("no_new_threads") && info["process_started_ms"]?.jsonPrimitive?.longOrNull!=null &&
+                info["open_files"].arr().isEmpty() && info["lock_ids"].arr().isEmpty() &&
+                stored.none { it.flag("same_cwd") && (it["created_ms"]?.jsonPrimitive?.longOrNull ?: Long.MAX_VALUE)>=
+                    info["process_started_ms"]!!.jsonPrimitive.long-1000 }) {
+                if(codexScreenNotStarted(screen ?: client.read(terminal.id))) notStarted=kind
+            }
         }
         val candidates=mutableListOf<TranscriptCandidate>()
         for(v in stored) candidates+=TranscriptCandidate(kind,v.text("session_id"),v.text("path"),process,machine)
@@ -115,7 +128,7 @@ internal class SessionResolver(private val client:HcClient) {
             if(id.isNotBlank() && !h.flag("isSidechain") && h.text("agentId").isEmpty() && (kind!=AgentKind.CODEX || codexRoot(h["payload"].obj())))
                 candidates+=TranscriptCandidate(kind,id,path,process,machine)
         }
-        return SessionEvidence(process,binding,candidates,info.text("reason").ifBlank { "Cannot determine a unique session" })
+        return SessionEvidence(process,binding,candidates,info.text("reason").ifBlank { "Cannot determine a unique session" },notStarted)
     }
 }
 

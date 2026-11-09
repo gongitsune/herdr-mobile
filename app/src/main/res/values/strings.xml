@@ -76,6 +76,7 @@
     <string name="agents">Agents</string>
     <string name="chat">Chat</string>
     <string name="chat_empty">No conversation messages yet.</string>
+    <string name="chat_not_started">What would you like %1$s to do?</string>
     <string name="thinking">Thinking</string>
     <string name="expand">Expand</string>
     <string name="collapse">Collapse</string>
@@ -192,4 +193,7 @@
     <string name="model_switch_accept">Switch</string>
     <string name="model_switch_cancel">Cancel</string>
     <string name="model_default_notice">Also becomes the default for new sessions (Claude Code behavior).</string>
+    <string name="command_suggestions">Commands</string>
+    <string name="command_loading">Loading…</string>
+    <string name="command_terminal_only">Terminal only</string>
 </resources>

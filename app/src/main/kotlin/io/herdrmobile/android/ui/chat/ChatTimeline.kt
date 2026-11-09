@@ -10,6 +10,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.herdrmobile.android.R
@@ -17,16 +18,18 @@ import io.herdrmobile.core.transcript.*
 
 @Composable
 fun ChatTimeline(items: List<ChatItem>, blocked: Boolean,
-    modifier: Modifier = Modifier, running: Boolean = false, runningElapsed: String? = null, loading: Boolean = false) {
+    modifier: Modifier = Modifier, running: Boolean = false, runningElapsed: String? = null, loading: Boolean = false,
+    pendingMessages: List<ChatItem.UserMessage> = emptyList()) {
     val scroll = rememberLazyListState()
     val entries = remember(items, running, blocked) { projectTurns(items, running || blocked) }
     val following by remember { derivedStateOf { val info = scroll.layoutInfo; (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 2 } }
-    LaunchedEffect(items.lastOrNull()) {
-        if (following && entries.isNotEmpty()) scroll.animateScrollToItem(entries.lastIndex)
+    LaunchedEffect(items.lastOrNull(), pendingMessages.lastOrNull()) {
+        val count = entries.size + pendingMessages.size
+        if (following && count > 0) scroll.animateScrollToItem(count - 1)
     }
     val latestQuestion = items.filterIsInstance<ChatItem.Question>().lastOrNull()?.id
     LazyColumn(modifier, state = scroll, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (entries.isEmpty() && !loading) item { Text(stringResource(R.string.chat_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (entries.isEmpty() && pendingMessages.isEmpty() && !loading) item { Text(stringResource(R.string.chat_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(entries, key = { it.id }) { entry -> when (entry) {
             is TimelineEntry.Notice -> Text(if (entry.marker.id.startsWith("local-command:")) entry.marker.label else stringResource(if (entry.marker.label == "Context compacted") R.string.context_compacted else R.string.history_missing), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             is TimelineEntry.Turn -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -36,13 +39,13 @@ fun ChatTimeline(items: List<ChatItem>, blocked: Boolean,
                 turn.answers.forEach { answer -> key(answer.id) { SelectionContainer { ChatMarkdown(answer.markdown) } } }
             }
         } }
-
+        items(pendingMessages, key = { it.id }) { UserBubble(it.text, pending = true) }
     }
 }
 
 @Composable
-private fun UserBubble(text: String) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
+private fun UserBubble(text: String, pending: Boolean = false) {
+    BoxWithConstraints(Modifier.fillMaxWidth().alpha(if (pending) .55f else 1f)) {
         Surface(Modifier.widthIn(max = maxWidth * 0.8f).align(androidx.compose.ui.Alignment.CenterEnd), shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
             SelectionContainer { Text(text, Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) }
         }

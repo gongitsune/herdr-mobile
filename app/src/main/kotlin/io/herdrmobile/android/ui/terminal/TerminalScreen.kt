@@ -18,6 +18,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.herdrmobile.android.R
 import io.herdrmobile.android.ui.terminalErrorMessage
 import io.herdrmobile.android.ui.chat.*
+import io.herdrmobile.core.transcript.TranscriptState
+import io.herdrmobile.core.workspace.AgentKind
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -38,18 +40,30 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
     var menu by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
     val chatItems by vm.chatItems.collectAsStateWithLifecycle()
+    val pendingMessages by vm.pendingMessages.collectAsStateWithLifecycle()
     val transcript by vm.transcriptState.collectAsStateWithLifecycle()
     val selected by vm.selectedSurface.collectAsStateWithLifecycle()
     val blocked by vm.blocked.collectAsStateWithLifecycle()
     LaunchedEffect(vm, connected, record?.foreground, (transcript as? io.herdrmobile.core.transcript.TranscriptState.Ready)?.binding?.machine) {
         while (true) { if (connected) vm.refreshAccount(); kotlinx.coroutines.delay(300_000) }
     }
-    val surface = detailSurface(selected, chatItems)
-    val unavailable = transcript is io.herdrmobile.core.transcript.TranscriptState.Unavailable || transcript is io.herdrmobile.core.transcript.TranscriptState.Failed
+    val kind = chatAgentKind(record)
+    val surface = detailSurface(selected, kind, transcript)
+    val unavailable = transcript is TranscriptState.Unavailable || transcript is TranscriptState.Failed
     val showTerminal = surface == DetailSurface.TERMINAL || unavailable
     val working = connected && (record?.status?.state == "working" || activity?.running == true)
     val live = rememberLiveHeader(working, blocked, activity, chatItems, record?.status_ms, connected)
     val question = activeQuestion(chatItems, blocked)
+    val commands by vm.commands.collectAsStateWithLifecycle()
+    val commandQuery = commandQuery(draft.text, kind, question != null || modelConfirmation != null)
+    val cwd = record?.foreground?.cwd?.takeIf(String::isNotBlank) ?: record?.cwd
+    val machine = (transcript as? TranscriptState.Ready)?.binding?.machine
+    LaunchedEffect(vm, connected, kind, cwd, machine) {
+        if (connected) vm.refreshCommands()
+    }
+    LaunchedEffect(vm, connected, commandQuery?.trigger) {
+        if (connected && commandQuery != null) vm.refreshCommands()
+    }
     val canStop = canStopWorking(working, blocked, question, cooldown)
     val title = record?.title?.ifBlank { record?.name.orEmpty() }?.ifBlank { stringResource(R.string.terminal) } ?: stringResource(R.string.terminal)
     Scaffold(
@@ -63,7 +77,7 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
             } }, navigationIcon = { if (showMenu) IconButton(onClick = back) { Icon(Icons.Default.Menu, stringResource(R.string.open_menu)) } },
                 expandedHeight = 56.dp,
                 actions = {
-                    SurfaceSwitch(surface) { vm.selectedSurface.value = it }
+                    if (supportsChat(kind)) SurfaceSwitch(surface) { vm.selectedSurface.value = it }
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreHoriz, stringResource(R.string.terminal_menu)) }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -81,14 +95,14 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
         bottomBar = {
             Column(Modifier.imePadding().navigationBarsPadding()) {
                 if (showTerminal) TerminalKeys(vm, ready && !observe)
-                else {
+                else if (supportsChat(kind)) {
                     if (modelConfirmation != null) ModelSwitchCard(modelConfirmation!!, ready && !observe && !busy, vm::confirmModelSwitch)
                     else question?.let { QuestionCard(it, ready && !observe && !busy, vm::choose) }
                     TextField(draft, { vm.draft.value = it; vm.choiceError.value = null }, modifier = Modifier.fillMaxWidth().padding(8.dp).heightIn(min = 96.dp), enabled = !observe,
                         placeholder = { Text(if (question != null) stringResource(R.string.choose_number, question.options.size) else stringResource(R.string.message_agent, title)) }, maxLines = 4, shape = RoundedCornerShape(24.dp),
                         colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent, disabledIndicatorColor = Color.Transparent),
-                        trailingIcon = { FilledIconButton(enabled = ready && !observe && !busy && (draft.isNotBlank() || canStop), onClick = { if (draft.isBlank() && canStop) vm.stopWorking() else vm.send() }, modifier = Modifier.padding(end = 8.dp)) {
-                            Icon(if (draft.isBlank() && canStop) Icons.Default.Stop else Icons.Default.ArrowUpward, stringResource(if (draft.isBlank() && canStop) R.string.interrupt else R.string.send))
+                        trailingIcon = { FilledIconButton(enabled = ready && !observe && !busy && (draft.text.isNotBlank() || canStop), onClick = { if (draft.text.isBlank() && canStop) vm.stopWorking() else vm.send() }, modifier = Modifier.padding(end = 8.dp)) {
+                            Icon(if (draft.text.isBlank() && canStop) Icons.Default.Stop else Icons.Default.ArrowUpward, stringResource(if (draft.text.isBlank() && canStop) R.string.interrupt else R.string.send))
                         } })
                     SessionControls(vm)
                     if (choiceError != null && question != null) Text(if (choiceError == ChoiceError.MANUAL) stringResource(R.string.choice_manual) else stringResource(R.string.invalid_choice, question.options.size), Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
@@ -104,21 +118,40 @@ fun TerminalScreen(vm: TerminalViewModel, titleContent: (@Composable () -> Unit)
                 }
             }
             if (surface == DetailSurface.CHAT && unavailable) TranscriptPanel(vm, transcript)
-            Box(Modifier.fillMaxWidth().weight(1f)) {
+            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
                 TerminalViewport(vm, Modifier.fillMaxSize(), visible = showTerminal, retry = retry)
                 if (surface == DetailSurface.CHAT && !unavailable) Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Column {
                         TranscriptPanel(vm, transcript)
-                        ChatTimeline(chatItems, blocked, Modifier.weight(1f).fillMaxWidth(),
-                            running = working || live?.working == true, runningElapsed = live?.elapsed, loading = transcript == null || transcript is io.herdrmobile.core.transcript.TranscriptState.Loading)
+                        if (transcript is TranscriptState.NotStarted && chatItems.isEmpty() && pendingMessages.isEmpty()) {
+                            EmptyConversation(kind, record?.foreground?.cwd?.takeIf { it.isNotBlank() } ?: record?.cwd.orEmpty(), Modifier.weight(1f))
+                        } else ChatTimeline(chatItems, blocked, Modifier.weight(1f).fillMaxWidth(),
+                            running = working || live?.working == true, runningElapsed = live?.elapsed, loading = transcript == null || transcript is TranscriptState.Loading,
+                            pendingMessages = pendingMessages.map { it.message })
                     }
                 }
+                // Scaffold padding excludes the top bar, composer and IME from these constraints.
+                if (!showTerminal && supportsChat(kind)) CommandSuggestionsPanel(
+                    commandQuery, commands, ready && !observe && !busy, maxHeight = maxHeight * .4f,
+                    modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter), select = vm::selectCommand)
             }
         }
     }
     CandidatePreview(vm)
 
 
+}
+
+@Composable
+private fun EmptyConversation(kind: AgentKind?, cwd: String, modifier: Modifier = Modifier) {
+    val name = stringResource(if (kind == AgentKind.CLAUDE_CODE) R.string.new_claude else R.string.new_codex)
+    val folder = cwd.trimEnd('/').substringAfterLast('/').ifBlank { cwd }
+    Column(modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.Bottom, horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+        Text(stringResource(R.string.chat_not_started, name), style = MaterialTheme.typography.bodyLarge)
+        if (folder.isNotBlank()) Text(folder, Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)

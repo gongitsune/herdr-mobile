@@ -774,6 +774,96 @@ class ClaudeAccountStore(client: HcClient, scope: CoroutineScope) : java.io.Clos
 - テスト：state_5 のフィクスチャ（一時 sqlite）で 1〜4、子スレッド除外、他の Codex 端末があるときは 3 で決めないこと、画面照合の曖昧さ。結合テスト（`herdr-mobile-it`）は実 Codex が無ければ skip。
 - 実例：`HC_SESSION=herdr-mobile-it` の `t23`（名前 `p9codex`、cwd は Claude の scratchpad/p9）が実際の Codex 0.167 で 1 往復済み。rollout は `~/.codex/sessions/2026/11/09/rollout-2026-11-09T18-16-10-01a1bf97-…jsonl`。default セッションの端末には触らない。
 
+## Phase 10: 会話が無くてもチャットを開く／エージェントでない端末はターミナルだけ（ユーザー指摘 2026-11-09）
+
+### 背景
+- 起動直後のエージェント（まだ何も話していない）は会話ログが無く `Unavailable` になり、ターミナルに落ちる。Ovis のように空のチャット（入力欄つき）で始めたい。
+- シェルなどエージェントでない端末でも Chat/Terminal の切り替えが出ている。出さずにターミナルだけにする。
+
+### 公開 API 変更（codex-a が先に入れる）
+```kotlin
+sealed interface TranscriptState {
+    ...
+    /** エージェントは確定しているが、会話はまだ始まっていない（空のチャットを出してよい） */
+    data class NotStarted(val kind: AgentKind) : TranscriptState
+}
+```
+
+### codex-a（core-client）
+1. `NotStarted` を返す条件（どちらも「確かにまだ何も話していない」ときだけ。曖昧なら従来どおり `Unavailable`）：
+   - Claude Code：`sessions/<pid>.json` の pid と procStart が一致し sessionId が取れるが、`projects/*/<sessionId>.jsonl` がまだ無い（または user / assistant の行が 1 つも無い）。
+   - Codex：open-fd でも Phase 9b でも決まらず、この cwd に TUI の起動以降に作られた対話スレッドが無く、画面（最後の `OpenAI Codex (v` 以降）に送信済みのプロンプト行（入力欄の `›` 以外の `› …`）も `Worked for` も無い。
+2. `NotStarted` の間も再評価を続ける（`nudge()` 直後、status / turn の変化、ポーリング）。最初のメッセージで会話ログができたら `Ready` に移る。
+3. テストを追加（Claude：registry あり・ファイル無し／Codex：開始画面／送信済み画面は NotStarted にしない）。
+
+### codex-b（app）
+1. **チャットに対応するのは Claude Code と Codex だけ**（`AgentDetector.detect(record)?.kind`）。それ以外（シェル、他のプログラム、エージェント終了後）は：
+   - トップバーの Chat/Terminal セグメントを出さない。ターミナルとキーバーだけ。入力欄・SessionControls も出さない。
+   - TranscriptSource を作らない（端末の foreground が変わってエージェントが起動したら作る。終了したら閉じる）。
+2. **既定の表示**：対応エージェントで `Ready`・`NotStarted`・`Loading` はチャット。`Unavailable` / `Failed` は今までどおりターミナル（セグメントの Chat には「会話ログが見つかりません」＋「候補から選ぶ」）。`detailSurface` の「items が空ならターミナル」はやめる。
+3. **空のチャット（NotStarted）**：Ovis の空チャットに倣い、入力欄の上に 1 行「<エージェント名> に何をしてもらいますか？」と、その下に薄くフォルダー名。入力欄・送信・停止・SessionControls は通常どおり使える。
+   送ったメッセージは会話ログに出るまで薄い user カードで仮表示する（文言は付けない）。送信後は `nudge()`。
+4. 文字列は values / values-ja。単体テスト（表示の決定：エージェント種別 × TranscriptState → セグメントの有無と既定の表示）。
+
+## Phase 11: チャットの入力欄で「/」を打つとコマンド一覧（ユーザー決定 2026-11-09）
+
+### 方針（Claude 確認済み）
+- **Claude Code**：Phase 9 の制御プロトコル（`claude -p --input-format stream-json …` → `initialize`）の応答 `response.response.commands`
+  （`name` / `description` / `argumentHint` / `builtin`）に、その cwd で使えるコマンド・スキル・カスタムコマンドが入っている（このリポジトリで 69 件）。**端末の cwd で** initialize する。
+  ただし `-p` のため対話 TUI 専用のコマンド（`/permissions` `/resume` `/config` など）は入らないので、Ovis の `server/skills/claude.ts` の `terminalBound` を静的に足し「ターミナル専用」とする。
+- **Codex**：一覧を返す API が無い。組み込みは Ovis `server/skills/codex.ts` の `builtins` / `descriptions`（codex-rs `slash_command.rs` 由来）を静的に持ち、`terminalBound` は「ターミナル専用」、`agentHidden` は出さない。
+  スキルは Heeler と同じく `codex -s read-only -a never app-server` を stdio で起動し `initialize` → `initialized` → `skills/list`（`{cwd}`）で取る（Ovis `server/codex-daemon.ts` の `skillRows` の検証に倣う。enabled のみ。トリガーは `$`）。取れなければ組み込みだけ。
+- 説明文はそのまま英語で出してよい（エージェント側の文言）。
+
+### 公開 API（codex-a が先に入れる）
+```kotlin
+package io.herdrmobile.core.usage
+enum class CommandRun { CHAT, TERMINAL }   // TERMINAL: 引数なしで送るとターミナルの選択画面が開く
+data class AgentCommand(val name: String, val description: String, val argumentHint: String = "",
+                        val trigger: Char = '/', val run: CommandRun = CommandRun.CHAT, val source: String = "builtin") // builtin / skill / custom
+class AgentCommandStore(client: HcClient, scope: CoroutineScope) : java.io.Closeable {
+    fun commands(kind: AgentKind, on: String?, cwd: String): StateFlow<List<AgentCommand>?>  // 初回参照で取得
+    suspend fun refresh(kind: AgentKind, on: String?, cwd: String, force: Boolean = false)  // (kind, machine, cwd) ごと 5 分スロットル
+    override fun close()
+}
+```
+
+### codex-a（core-client）
+1. Claude：Phase 9 のスクリプトに「commands モード」（cwd 指定で initialize だけ、`commands` の name/description/argumentHint/builtin だけ返す）を足す。ClaudeAccountStore のモデル一覧取得と同じプロセス起動の作法（ログインシェルの PATH、15 秒、プロセスグループ kill）。
+   静的な terminalBound を足し、同名があれば run=TERMINAL に上書き。`agentHidden`（agents, heapdump, setup-bedrock, setup-vertex）は出さない。
+2. Codex：静的な組み込み＋ app-server の skills/list。スクリプトは `codex` をログインシェルの PATH で探す。全体 20 秒。
+3. 並びは「組み込み → カスタム → スキル」、同名は後勝ちにしない（スキルが組み込みと同名なら組み込みを残す）。
+4. 単体テスト（スクリプト出力のパース、terminalBound の適用、Codex の skills/list 検証）。結合テストは herdr-mobile-it（claude / codex が無ければ skip）。
+
+### codex-b（app）
+1. 入力欄の先頭が `/`（Codex は `$` も）で、まだ空白を打っていない間、入力欄の真上にコマンド候補のリスト（Claude Code アプリ風）：
+   - 各行：`/名前`（等幅・太字）＋薄い argumentHint、下に説明 1 行（省略）。TERMINAL のものは右端に小さなターミナルのアイコン。
+   - 打った文字で前方一致→部分一致の順に絞り込み。最大高さは画面の 40%、スクロール可。該当なしなら出さない。
+   - 行をタップ：`/名前 ` を入力欄に入れる（argumentHint が空で CHAT のものは、そのまま送信してよい）。TERMINAL のものはタップで `/名前` を送り、ターミナル表示に切り替える。
+   - 質問カードが出ている間（番号入力モード）は出さない。
+2. 取得のタイミング：対応エージェントの画面を開いたとき（cwd が変わったときも）と、入力欄で `/` を打ったとき（スロットルは core）。取得中は「読み込み中…」1 行。
+3. ストアは接続ごとに 1 つ（HostConnections）。文字列は values / values-ja。絞り込みは純粋関数にしてテスト。
+
+### Phase 11 エミュレータ確認の修正（Claude 2026-11-09、codex-b）
+1. 候補のリストがキーボード表示中にトップバーの上まで広がって重なる。リストの高さは「トップバーの下端から入力欄の上端まで」の範囲に収め、その中で最大 40%（キーボード表示中は残りの高さ基準）。トップバーには絶対に重ねない。
+2. 引数の書き方（argumentHint）が長い行でコマンド名が `/col…` のように潰れ、1 行目は名前が消えていた。コマンド名は常に全部出し（縮めない）、argumentHint の方を 1 行で省略する。
+3. 候補を選んだあと、カーソルが元の位置（`/co|ntext`）に残る。入力欄は `TextFieldValue` で扱い、カーソルを末尾に置く。argumentHint があれば `/名前 `（末尾に空白）、無ければ `/名前`。CHAT の候補は自動送信しない（入れるだけ）。
+4. 並び順を確認：空の絞り込みでは「組み込み（builtin=true）→ カスタム → スキル」。今はスキル（dataviz など）が組み込みの間に混ざっている。絞り込み時は前方一致を先、その中で同じ並び順。
+5. 単体テスト（並び順、選択後のテキストとカーソル位置）。
+
+## Phase 12: エージェントのアイコンを Claude Code / Codex の実物に（ユーザー指摘 2026-11-09）
+
+### codex-b（app）
+1. Ovis `src/components/AgentMark.tsx`（MIT、chatmux の llm-logo-provider 由来）の `ClaudeMark` と `CodexMark` の SVG パスを、そのまま Android の VectorDrawable にする：
+   - `res/drawable/ic_agent_claude.xml`：viewBox 512×509.64。タイル `#D77655`、記号 `#FCF2EE`（ブランド色のまま。テーマで着色しない）。
+   - `res/drawable/ic_agent_codex.xml`：viewBox は `100 100 520 520` 相当（translate で原点合わせ）。単色。表示時に `LocalContentColor`（onSurface 系）で着色する。
+2. `ProgramAvatar`（ui/theme/DenseRows.kt）で CLAUDE_CODE / CODEX はこの画像を使う。
+   - Claude はタイル自体が角丸の背景なので、secondaryContainer の Surface で囲まず、同じ外寸（36dp 相当）で画像だけ出す。
+   - Codex は今の Surface（角丸の背景）の中に記号を出す。
+   - それ以外の種別・シェルは今のアイコンのまま。ドロワーの行、エージェント一覧、トップバー、タブのシートなど ProgramAvatar を使っている所すべてに効くこと。別のアイコン描画をしている所があればそれも揃える。特に `NewTerminalSheet.kt` の「Claude Code」「Codex」の項目（今は AutoAwesome / Code）も同じ画像にする。
+3. `assets/third_party_notices.txt` に Ovis（MIT、devswha/ovis）の著作権表示とライセンス本文を追記し、ロゴの商標は各社に帰属する旨を 1 行。
+4. ライト／ダーク両方で確認できるよう、Compose の @Preview を 1 つ置く（任意）。ビルド・テスト・lint を通す。
+
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。
 - codex-b: それ以外すべて（ルート Gradle 設定、`gradle/libs.versions.toml`、`app/**`、`third_party/**`）。

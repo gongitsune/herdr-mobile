@@ -19,6 +19,42 @@ import kotlin.test.*
 class TranscriptSourceTest {
     private val user="""{"type":"user","uuid":"u","parentUuid":null,"sessionId":"fixture-session","message":{"content":"Synthetic prompt"}}"""
     private val answer="""{"type":"assistant","uuid":"a","parentUuid":"u","sessionId":"fixture-session","message":{"id":"m","content":[{"type":"text","text":"Synthetic answer"}]}}"""
+    @Test fun notStartedReevaluatesOnPollingNudgeAndStatusAndClearsPreviousConversation():Unit=runBlocking {
+        for(kind in listOf(AgentKind.CLAUDE_CODE,AgentKind.CODEX)) {
+            for(trigger in listOf("poll","nudge","status","turn","partial")) withTimeout(6000) {
+                val peer=TranscriptPeer("",kind).apply { notStarted=true }
+                val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+                val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+                val source=TranscriptSource(client,"t1",scope,if(trigger in setOf("poll","partial")) 20 else 1500)
+                try {
+                    client.connect()
+                    assertEquals(TranscriptState.NotStarted(kind),source.state.first { it is TranscriptState.NotStarted })
+                    assertTrue(source.items.value.isEmpty()); assertNull(source.session.value)
+                    source.candidates()
+                    assertEquals(TranscriptState.NotStarted(kind),source.state.value)
+                    if(trigger=="partial") {
+                        peer.notStarted=false; peer.exact=false
+                        source.refresh()
+                        assertIs<TranscriptState.Unavailable>(source.state.value)
+                        peer.exact=true
+                    }
+                    peer.text.set(initialRows(kind).joinToString("\n",postfix="\n"))
+                    peer.notStarted=false
+                    when(trigger) {
+                        "nudge" -> source.nudge()
+                        "status" -> peer.statusEvent("working")
+                        "turn" -> peer.turnEvent()
+                    }
+                    withTimeout(750) { source.state.first { it is TranscriptState.Ready } }
+                    assertTrue(source.items.value.any { it is ChatItem.UserMessage })
+                    peer.notStarted=true
+                    if(trigger=="partial") source.candidates() else source.refresh()
+                    assertEquals(TranscriptState.NotStarted(kind),source.state.value)
+                    assertTrue(source.items.value.isEmpty()); assertNull(source.session.value)
+                } finally { source.close(); client.close(); scope.cancel() }
+            }
+        }
+    }
     @Test fun appendOnlyReadRereadsPartialTailWithoutDuplicatesAndResetsAfterTruncation():Unit=runBlocking {
         withTimeout(6000) {
             val peer=TranscriptPeer(user+"\n")
@@ -243,6 +279,15 @@ class TranscriptSourceTest {
         private val seq=AtomicInteger()
         val status=AtomicReference(initialStatus)
         @Volatile var exact=true
+        @Volatile var notStarted=false
+        fun turnEvent() {
+            peer.send(Frame(2,0,(buildJsonObject {
+                put("method","event"); put("params",buildJsonObject {
+                    put("seq",seq.incrementAndGet()); put("type","turn"); put("terminal","t1")
+                    put("data",buildJsonObject { put("turn",1) })
+                })
+            }.toString()+"\n").toByteArray()))
+        }
         fun statusEvent(word:String) {
             status.set(word)
             val message=buildJsonObject {
@@ -272,13 +317,17 @@ class TranscriptSourceTest {
                     probes.incrementAndGet()
                     val evidence=buildJsonObject {
                         put("process_key",process.get()); put("reason","Ambiguous fixture")
-                        if(exact && kind==AgentKind.CODEX) put("open_files",buildJsonArray { add("/fixture/session.jsonl") })
-                        if(exact) put("binding",buildJsonObject { put("session_id","fixture-session"); put("path","/fixture/session.jsonl") })
+                        put("not_started",notStarted && kind==AgentKind.CLAUDE_CODE)
+                        put("no_new_threads",notStarted && kind==AgentKind.CODEX)
+                        put("process_started_ms",1000)
+                        if(exact && !notStarted && kind==AgentKind.CODEX) put("open_files",buildJsonArray { add("/fixture/session.jsonl") })
+                        if(exact && !notStarted) put("binding",buildJsonObject { put("session_id","fixture-session"); put("path","/fixture/session.jsonl") })
                         put("candidates",buildJsonArray { add(buildJsonObject { put("session_id","fixture-session"); put("path","/fixture/session.jsonl") }) })
                     }
                     val encoded=Base64.getEncoder().encodeToString(evidence.toString().toByteArray())
                     peer.respond(r,"""{"code":0,"stdout":"$encoded","stderr":"","truncated":false,"timed_out":false,"ms":1}"""); true
                 }
+                "terminal.read" -> { peer.respond(r,"""{"text":"OpenAI Codex (v0.fixture)\n› Ask Codex to do anything"}"""); true }
                 "file.read" -> {
                     val offset=p["offset"]!!.jsonPrimitive.long; val limit=p["limit"]!!.jsonPrimitive.int
                     if(limit==2000) offsets.add(offset)

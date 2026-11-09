@@ -2,6 +2,33 @@ import unittest, tempfile, sqlite3, os, json, glob, re
 from pathlib import Path
 
 class StoreTest(unittest.TestCase):
+    def test_no_new_threads_requires_complete_inventory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.assertTrue(codex_has_no_new_threads(temp, '/project', 10000))
+            (root/'sessions').mkdir()
+            self.assertTrue(codex_has_no_new_threads(temp, '/project', 10000))
+            (root/'sessions'/'rollout-unknown.jsonl').write_text('{}\n')
+            self.assertFalse(codex_has_no_new_threads(temp, '/project', 10000))
+            db = sqlite3.connect(root/'state_5.sqlite')
+            db.execute('CREATE TABLE threads(id TEXT, rollout_path TEXT, cwd TEXT, archived INTEGER, agent_role TEXT, thread_source TEXT, source TEXT, created_at INTEGER, created_at_ms INTEGER, updated_at INTEGER)')
+            # No usable rollout is needed to disprove an empty conversation.
+            def add(id, cwd='/project', created=10000, role=None, source='cli'):
+                db.execute('INSERT INTO threads VALUES(?,?,?,0,?,NULL,?,0,?,10)',
+                           (id, str(root/'sessions'/('rollout-'+id+'.jsonl')), cwd, role, source, created))
+                db.commit()
+            add('old', created=9999)
+            add('peer', cwd='/elsewhere')
+            add('worker', role='worker')
+            add('exec', source='exec')
+            self.assertTrue(codex_has_no_new_threads(temp, '/project', 10000))
+            add('new-at-boundary')
+            self.assertEqual([], codex_candidates(temp, '/project'))
+            before = {p.name:p.read_bytes() for p in root.glob('*.sqlite*')}
+            self.assertFalse(codex_has_no_new_threads(temp, '/project', 10000))
+            self.assertEqual(before, {p.name:p.read_bytes() for p in root.glob('*.sqlite*')})
+            db.close()
+
     def test_read_only_inventory(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

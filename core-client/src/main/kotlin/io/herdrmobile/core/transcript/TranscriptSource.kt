@@ -51,6 +51,7 @@ class TranscriptSource(
     private var bytes=0L
     private var resetOnReconnect=false
     private var canFollow=false
+    private var waitingForConversation=false
     private var historyPrefix:List<String> = emptyList()
     private var historyComplete=true
     private var historyLoaded=false
@@ -96,24 +97,31 @@ class TranscriptSource(
     private suspend fun update(rebind:Boolean) = withContext(Dispatchers.Default) { lock.withLock {
         if(!owned.isActive) return@withLock
         val terminal=store.terminals.value.find { it.id==terminalId } ?: return@withLock
-        val codex=AgentDetector.detect(terminal)?.kind==AgentKind.CODEX
-        if(!rebind && !canFollow && !codex) return@withLock
+        val kind=AgentDetector.detect(terminal)?.kind
+        val codex=kind==AgentKind.CODEX
+        if(kind !in setOf(AgentKind.CLAUDE_CODE,AgentKind.CODEX)) waitingForConversation=false
+        if(!rebind && !canFollow && !codex && !waitingForConversation) return@withLock
         try {
-            if(rebind || codex) {
+            if(rebind || codex || waitingForConversation) {
                 val evidence=resolver.resolve(terminal)
                 val chosen=selected?.takeIf { it.processKey==evidence.processKey }
                 if(selected!=null && chosen==null) { selected=null; previewed.clear(); mutableItems.value=emptyList() }
-                val resolved=evidence.binding ?: chosen
+                val resolved=if(evidence.notStarted!=null) null else evidence.binding ?: chosen
                 if(resolved==null) {
                     canFollow=false
                     mutableSession.value=null
                     projectedRevision=-1
                     mutableActivity.value=null.withTerminal(terminal)
-                    mutableState.value=TranscriptState.Unavailable(evidence.reason,evidence.candidates)
-                    if(codex || binding?.confirmed==true) { binding=null; mutableItems.value=emptyList() }
+                    if(evidence.notStarted!=null) {
+                        showNotStarted(evidence.notStarted,terminal)
+                    } else {
+                        mutableState.value=TranscriptState.Unavailable(evidence.reason,evidence.candidates)
+                        if(codex || binding?.confirmed==true) { binding=null; mutableItems.value=emptyList() }
+                    }
                     return@withLock
                 }
                 if(evidence.binding!=null && chosen!=null && evidence.binding.path!=chosen.path) selected=null
+                waitingForConversation=false
                 canFollow=true
                 if(resolved.path!=binding?.path || resolved.processKey!=binding?.processKey || resetOnReconnect) {
                     binding=resolved; resetReader(); mutableItems.value=emptyList(); resetOnReconnect=false
@@ -162,6 +170,14 @@ class TranscriptSource(
         historyLoaded=false; historyComplete=true; historyBytes=0; lastTail=null
         projectedActivity=null; revision++
     }
+    private fun showNotStarted(kind:AgentKind,terminal:Terminal) {
+        // Keep retrying through transient partial writes/ambiguous evidence.
+        waitingForConversation=true; canFollow=false
+        selected=null; previewed.clear(); binding=null; resetReader()
+        projectedRevision=-1; mutableItems.value=emptyList()
+        mutableActivity.value=null.withTerminal(terminal)
+        mutableState.value=TranscriptState.NotStarted(kind)
+    }
     /** Drain pages in one update. A partial EOF is retried on the next poll, never spun on. */
     private suspend fun readAppend(current:TranscriptBinding):Boolean {
         var resets=0
@@ -204,7 +220,8 @@ class TranscriptSource(
     suspend fun candidates():List<TranscriptCandidate> = lock.withLock {
         val terminal=store.terminals.value.find { it.id==terminalId } ?: return@withLock emptyList()
         val evidence=resolver.resolve(terminal,listCandidates=true)
-        mutableState.value=TranscriptState.Unavailable(evidence.reason,evidence.candidates)
+        if(evidence.notStarted!=null) showNotStarted(evidence.notStarted,terminal)
+        else mutableState.value=TranscriptState.Unavailable(evidence.reason,evidence.candidates)
         evidence.candidates
     }
     suspend fun preview(candidate:TranscriptCandidate):List<ChatItem> = lock.withLock {

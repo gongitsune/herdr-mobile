@@ -1,5 +1,6 @@
 package io.herdrmobile.android.ui.terminal
 
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.termux.view.TerminalView
@@ -20,6 +21,61 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 class TerminalViewModel(private val connections: HostConnections, private val hostId: String, private val id: String) : ViewModel() {
+    val commands = MutableStateFlow<List<AgentCommand>?>(null)
+    private data class CommandKey(val client: HcClient, val kind: AgentKind, val machine: String?, val cwd: String)
+    private var commandKey: CommandKey? = null
+    private var commandWatch: Job? = null
+    private var commandRefresh: Job? = null
+
+    private fun currentCommandKey(): CommandKey? {
+        if (!connected.value) return null
+        val terminal = record.value ?: return null
+        val kind = chatAgentKind(terminal) ?: return null
+        val client = connections.client(hostId) ?: return null
+        val machine = (transcriptState.value as? TranscriptState.Ready)?.binding?.machine
+            ?: id.substringBefore('/', "").takeIf { '/' in id }
+        val cwd = terminal.foreground?.cwd?.takeIf(String::isNotBlank) ?: terminal.cwd
+        return CommandKey(client, kind, machine, cwd)
+    }
+
+    fun refreshCommands() {
+        val key = currentCommandKey() ?: return
+        val store = connections.commands(hostId) ?: return
+        if (key != commandKey) {
+            commandWatch?.cancel(); commandRefresh?.cancel()
+            commandKey = key
+            val snapshot = store.commands(key.kind, key.machine, key.cwd)
+            commands.value = snapshot.value
+            commandWatch = viewModelScope.launch { snapshot.collect { commands.value = it } }
+        }
+        if (commandRefresh?.isActive == true) return
+        commandRefresh = viewModelScope.launch {
+            try { store.refresh(key.kind, key.machine, key.cwd) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* Store retains the last successful snapshot. */ }
+        }
+    }
+
+    fun selectCommand(command: AgentCommand) {
+        if (!connected.value || !ready.value || observe.value || busy.value || modelConfirmation.value != null) return
+        if (currentCommandKey() != commandKey) return
+        val query = commandQuery(draft.value.text, chatAgentKind(record.value), activeQuestion(chatItems.value, blocked.value) != null) ?: return
+        if (command !in filterCommands(commands.value.orEmpty(), query)) return
+        if (command.run == CommandRun.CHAT) {
+            draft.value = command.composerValue()
+            choiceError.value = null
+            return
+        }
+        val originalDraft = draft.value
+        action {
+            checkNotNull(connections.client(hostId)).send(id, "${command.trigger}${command.name}")
+            if (draft.value == originalDraft) draft.value = TextFieldValue()
+            selectedSurface.value = DetailSurface.TERMINAL
+            source?.nudge()
+            sentRecently()
+        }
+    }
+
     val session = MutableStateFlow<SessionInfo?>(null)
     val account = MutableStateFlow<ClaudeAccount?>(null)
     val pendingModel = MutableStateFlow<AgentModel?>(null)
@@ -99,6 +155,7 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
     val activity = MutableStateFlow<TurnActivity?>(null)
     val observe = MutableStateFlow(false)
     val chatItems = MutableStateFlow(emptyList<ChatItem>())
+    val pendingMessages = MutableStateFlow(emptyList<PendingChatMessage>())
     val transcriptState = MutableStateFlow<TranscriptState?>(null)
     val blocked = MutableStateFlow(false)
     val selectedSurface = MutableStateFlow<DetailSurface?>(null)
@@ -108,12 +165,13 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
     val candidateBusy = MutableStateFlow(false)
     private var source: TranscriptSource? = null
     private var sourceClient: HcClient? = null
+    private var chatProcess: Pair<AgentKind, Long?>? = null
     private var sourceWatch: Job? = null
     private var previewJob: Job? = null
     val control = MutableStateFlow(false)
     val alt = MutableStateFlow(false)
     val shift = MutableStateFlow(false)
-    val draft = MutableStateFlow("")
+    val draft = MutableStateFlow(TextFieldValue())
     val error = MutableStateFlow<HcError?>(null)
     val ended = MutableStateFlow(false)
     val recovering = MutableStateFlow(false)
@@ -146,23 +204,25 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
                 blocked.value = row?.terminal?.status?.state == "blocked" && !row.stale
                 val client = connections.client(hostId)
                 if (state !is ConnectionState.Connected || client == null) {
+                    stopTranscript()
                     stopStream(); wasConnected = false
                     recovering.value = state is ConnectionState.Reconnecting || state is ConnectionState.Connecting
                     error.value = (state as? ConnectionState.Failed)?.error
                         ?: if (state == null) HcError("not_found", "Host removed") else null
                     return@collect
                 }
-                if (sourceClient !== client) followTranscript(client)
                 val recoveredConnection = !wasConnected || client !== previousClient
                 wasConnected = true; previousClient = client
                 if (recoveredConnection) { stopStream(); ended.value = false; error.value = null }
                 // A reconnect's old snapshot is display-only. Wait for the fresh record.
                 if (row == null || row.stale) {
+                    stopTranscript()
                     if (remote != null) { stopStream(); ended.value = true }
                     recovering.value = !ended.value
                     return@collect
                 }
                 val terminal = row.terminal
+                updateTranscript(client, terminal)
                 val recovery = terminal.attachRecovery(previous)
                 previous = terminal
                 when (recovery) {
@@ -188,6 +248,11 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
     private fun stopStream() { confirmationWatch?.cancel(); modelConfirmation.value = null; generation++; remote?.dispose(); remote = null; ready.value = false }
     fun unbind() {
         watch?.cancel(); watch = null; stopStream(); recovering.value = false; connected.value = false
+        stopTranscript()
+    }
+    private fun stopTranscript() {
+        commandWatch?.cancel(); commandWatch = null; commandRefresh?.cancel(); commandRefresh = null
+        commandKey = null; commands.value = null
         previewJob?.cancel(); sourceWatch?.cancel(); sourceWatch = null
         source?.close(); source = null; sourceClient = null
         activity.value = null
@@ -196,6 +261,20 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
         accountWatch?.cancel(); accountWatch = null; accountKey = null; account.value = null
         transcriptState.value = null; chatItems.value = emptyList()
         candidate.value = null; candidatePreview.value = null; candidateError.value = null
+        candidateBusy.value = false
+    }
+    private fun updateTranscript(client: HcClient, terminal: Terminal) {
+        val kind = chatAgentKind(terminal)
+        val process = kind?.let { it to (terminal.foreground?.pid?.toLong() ?: terminal.pid) }
+        if (process != chatProcess) {
+            stopTranscript()
+            chatProcess = process
+            selectedSurface.value = null
+            pendingMessages.value = emptyList()
+        }
+        if (kind != null && sourceClient !== client) followTranscript(client)
+        // A new process can have the same kind and cwd, so screen effect keys alone are insufficient.
+        if (kind != null && currentCommandKey() != commandKey) refreshCommands()
     }
     private fun followTranscript(client: HcClient) {
         sourceWatch?.cancel(); source?.close()
@@ -209,6 +288,7 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
             } }
             combine(transcript.state, transcript.items, transcript.activity) { state, items, activity -> Triple(state, items, activity) }.collect { (state, items, turnActivity) ->
                 transcriptState.value = state; chatItems.value = visibleChatItems(state, items)
+                pendingMessages.value = reconcilePendingMessages(pendingMessages.value, chatItems.value)
                 activity.value = turnActivity
             }
         }
@@ -252,8 +332,8 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
     fun keyCode(code: Int) { if (ready.value && !observe.value) { remote?.keyCode(code, control.value, alt.value, shift.value); consumeModifiers() } }
     fun key(value: String) { if (ready.value && !observe.value) { remote?.write(value); consumeModifiers() } }
     fun send() {
-        if (observe.value || !ready.value || busy.value || draft.value.isBlank()) return
-        val value = draft.value
+        if (observe.value || !ready.value || busy.value || draft.value.text.isBlank() || chatAgentKind(record.value) == null) return
+        val value = draft.value.text
         val question = activeQuestion(chatItems.value, blocked.value)
         if (question != null) {
             val option = numberedOption(question, value)
@@ -261,20 +341,28 @@ class TerminalViewModel(private val connections: HostConnections, private val ho
             if (option.keys.isEmpty()) { choiceError.value = ChoiceError.MANUAL; return }
             choiceError.value = null
             if (canChooseOption(chatItems.value, question, option, blocked.value, ready.value && !observe.value, transcriptState.value is TranscriptState.Ready)) {
-                submitChoice(question, option) { if (draft.value == value) draft.value = "" }
+                submitChoice(question, option) { if (draft.value.text == value) draft.value = TextFieldValue() }
             }
             return
         }
+        val process = chatProcess
+        val pending = pendingChatMessage(value, chatItems.value)
         viewModelScope.launch {
             busy.value = true; error.value = null
+            pendingMessages.value = reconcilePendingMessages(pendingMessages.value + pending, chatItems.value)
+            var sent = false
             try {
                 checkNotNull(connections.client(hostId)).send(id, value)
-                if (draft.value == value) draft.value = ""
+                sent = true
+                if (draft.value.text == value) draft.value = TextFieldValue()
                 source?.nudge()
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 error.value = e.asHcError(); source?.nudge()
-            } finally { sentRecently(); busy.value = false }
+            } finally {
+                if (!sent || chatProcess != process) pendingMessages.value = pendingMessages.value.filterNot { it.message.id == pending.message.id }
+                sentRecently(); busy.value = false
+            }
         }
     }
     fun stopWorking() {

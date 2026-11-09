@@ -1,0 +1,521 @@
+{
+  "claude": {
+    "commands": [
+      {
+        "name": "config",
+        "description": "Open the Settings interface"
+      },
+      {
+        "name": "hooks",
+        "description": "View hook configurations"
+      },
+      {
+        "name": "permissions",
+        "description": "Manage allow, ask and deny rules"
+      },
+      {
+        "name": "plugin",
+        "description": "Manage Claude Code plugins"
+      },
+      {
+        "name": "resume",
+        "description": "Resume a conversation by ID or name"
+      },
+      {
+        "name": "skills",
+        "description": "List available skills"
+      },
+      {
+        "name": "theme",
+        "description": "Change the color theme"
+      },
+      {
+        "name": "cost",
+        "description": "Alias of /usage"
+      },
+      {
+        "name": "usage",
+        "description": "Show session cost, plan usage and activity"
+      },
+      {
+        "name": "stats",
+        "description": "Alias of /usage, opened on the Stats tab"
+      },
+      {
+        "name": "status",
+        "description": "Run /status"
+      },
+      {
+        "name": "help",
+        "description": "Run /help"
+      },
+      {
+        "name": "memory",
+        "description": "Run /memory"
+      },
+      {
+        "name": "sandbox",
+        "description": "Configure sandboxing"
+      },
+      {
+        "name": "tasks",
+        "description": "View and manage background work"
+      },
+      {
+        "name": "workflows",
+        "description": "Browse workflows"
+      },
+      {
+        "name": "powerup",
+        "description": "Discover Claude Code features through interactive lessons"
+      },
+      {
+        "name": "scroll-speed",
+        "description": "Adjust mouse wheel scroll speed"
+      },
+      {
+        "name": "mobile",
+        "description": "Show a QR code for the mobile app"
+      },
+      {
+        "name": "passes",
+        "description": "Share a free week of Claude Code"
+      },
+      {
+        "name": "add-dir",
+        "description": "Add a new working directory"
+      },
+      {
+        "name": "cd",
+        "description": "Move this session to a new working directory"
+      },
+      {
+        "name": "mcp",
+        "description": "Manage MCP servers"
+      },
+      {
+        "name": "artifacts",
+        "description": "Browse published and shared artifacts"
+      },
+      {
+        "name": "auto-mode-setup",
+        "description": "Teach auto mode about your environment"
+      },
+      {
+        "name": "autofix-pr",
+        "description": "Monitor and autofix issues with the current pull request"
+      },
+      {
+        "name": "bug",
+        "description": "Report a bug or share your conversation"
+      },
+      {
+        "name": "chrome",
+        "description": "Open Claude in Chrome settings"
+      },
+      {
+        "name": "design-login",
+        "description": "Authorize design-system access"
+      },
+      {
+        "name": "desktop",
+        "description": "Continue the session in the Claude Code Desktop app"
+      },
+      {
+        "name": "feedback",
+        "description": "Send feedback or report a bug"
+      },
+      {
+        "name": "import",
+        "description": "Import configuration from another coding agent"
+      },
+      {
+        "name": "install-github-app",
+        "description": "Set up Claude GitHub Actions"
+      },
+      {
+        "name": "install-slack-app",
+        "description": "Install the Claude Slack app"
+      },
+      {
+        "name": "login",
+        "description": "Run /login"
+      },
+      {
+        "name": "logout",
+        "description": "Run /logout"
+      },
+      {
+        "name": "privacy-settings",
+        "description": "View and update privacy settings"
+      },
+      {
+        "name": "rate-limit-options",
+        "description": "Manage usage limits and upgrade options"
+      },
+      {
+        "name": "remote-control",
+        "description": "Control this session from your phone or browser"
+      },
+      {
+        "name": "remote-env",
+        "description": "Choose the default cloud environment"
+      },
+      {
+        "name": "skill-doctor",
+        "description": "Show unused skills that cost context"
+      },
+      {
+        "name": "teleport",
+        "description": "Send this session to the cloud or resume a cloud session"
+      },
+      {
+        "name": "terminal-setup",
+        "description": "Run /terminal-setup"
+      },
+      {
+        "name": "ultrareview",
+        "description": "Start a cloud agent that finds and verifies bugs"
+      },
+      {
+        "name": "upgrade",
+        "description": "Upgrade your plan"
+      },
+      {
+        "name": "usage-credits",
+        "description": "Configure or request usage credits"
+      },
+      {
+        "name": "web-setup",
+        "description": "Set up cloud sessions with GitHub"
+      },
+      {
+        "name": "diff",
+        "description": "Run /diff"
+      },
+      {
+        "name": "ide",
+        "description": "Manage IDE integrations"
+      },
+      {
+        "name": "copy",
+        "description": "Copy a response to the clipboard"
+      },
+      {
+        "name": "voice",
+        "description": "Toggle voice mode"
+      },
+      {
+        "name": "keybindings",
+        "description": "Open keyboard shortcuts"
+      },
+      {
+        "name": "stickers",
+        "description": "Order Claude Code stickers"
+      },
+      {
+        "name": "radio",
+        "description": "Listen to Claude FM radio"
+      }
+    ],
+    "hidden": [
+      "agents",
+      "heapdump",
+      "setup-bedrock",
+      "setup-vertex"
+    ]
+  },
+  "codex": {
+    "commands": [
+      {
+        "name": "model",
+        "description": "Choose what model and reasoning effort to use"
+      },
+      {
+        "name": "daybreak",
+        "description": "Turn Daybreak on or off"
+      },
+      {
+        "name": "ide",
+        "description": "Include current selection, open files, and other context from your IDE"
+      },
+      {
+        "name": "permissions",
+        "description": "Choose what Codex is allowed to do"
+      },
+      {
+        "name": "keymap",
+        "description": "Remap TUI shortcuts"
+      },
+      {
+        "name": "vim",
+        "description": "Toggle Vim mode for the composer"
+      },
+      {
+        "name": "setup-default-sandbox",
+        "description": "Set up elevated agent sandbox"
+      },
+      {
+        "name": "experimental",
+        "description": "Toggle experimental features"
+      },
+      {
+        "name": "approve",
+        "description": "Approve one retry of a recent auto-review denial"
+      },
+      {
+        "name": "memories",
+        "description": "Configure memory use and generation"
+      },
+      {
+        "name": "skills",
+        "description": "Use skills to improve how Codex performs specific tasks"
+      },
+      {
+        "name": "import",
+        "description": "Import setup, this project, and recent chats from Claude Code"
+      },
+      {
+        "name": "hooks",
+        "description": "View and manage lifecycle hooks"
+      },
+      {
+        "name": "review",
+        "description": "Review my current changes and find issues"
+      },
+      {
+        "name": "rename",
+        "description": "Rename the current thread"
+      },
+      {
+        "name": "new",
+        "description": "Start a new chat during a conversation"
+      },
+      {
+        "name": "archive",
+        "description": "Archive this session"
+      },
+      {
+        "name": "delete",
+        "description": "Permanently delete this session"
+      },
+      {
+        "name": "resume",
+        "description": "Resume a saved chat"
+      },
+      {
+        "name": "fork",
+        "description": "Fork the current chat"
+      },
+      {
+        "name": "worktree",
+        "description": "Start or continue a conversation in a new worktree"
+      },
+      {
+        "name": "init",
+        "description": "Create an AGENTS.md file with instructions for Codex"
+      },
+      {
+        "name": "compact",
+        "description": "Summarize conversation to prevent hitting the context limit"
+      },
+      {
+        "name": "config",
+        "description": "Configure Codex preferences"
+      },
+      {
+        "name": "recap",
+        "description": "Summarize the current conversation now"
+      },
+      {
+        "name": "plan",
+        "description": "Switch to Plan mode"
+      },
+      {
+        "name": "voice",
+        "description": "Start or stop voice; use /voice settings to choose a voice"
+      },
+      {
+        "name": "goal",
+        "description": "Set or view the goal for a long-running task"
+      },
+      {
+        "name": "agents",
+        "description": "Open the agent command center"
+      },
+      {
+        "name": "side",
+        "description": "Start a side conversation in an ephemeral fork"
+      },
+      {
+        "name": "btw",
+        "description": "Start a side conversation in an ephemeral fork"
+      },
+      {
+        "name": "copy",
+        "description": "Copy the last response or part of it"
+      },
+      {
+        "name": "export",
+        "description": "Export the conversation as markdown"
+      },
+      {
+        "name": "raw",
+        "description": "Toggle raw scrollback mode for copy-friendly terminal selection"
+      },
+      {
+        "name": "tui",
+        "description": "Choose the TUI mode for the next launch"
+      },
+      {
+        "name": "diff",
+        "description": "Show git diff (including untracked files)"
+      },
+      {
+        "name": "mention",
+        "description": "Mention a file"
+      },
+      {
+        "name": "status",
+        "description": "Show current session configuration and token usage"
+      },
+      {
+        "name": "daemon",
+        "description": "Manage the local background server"
+      },
+      {
+        "name": "warnings",
+        "description": "View retained warnings and diagnostic details"
+      },
+      {
+        "name": "cd",
+        "description": "Change the current working directory"
+      },
+      {
+        "name": "pwd",
+        "description": "Show the current working directory"
+      },
+      {
+        "name": "usage",
+        "description": "View account usage or use a usage limit reset"
+      },
+      {
+        "name": "title",
+        "description": "Configure which items appear in the terminal title"
+      },
+      {
+        "name": "statusline",
+        "description": "Configure which items appear in the status line"
+      },
+      {
+        "name": "theme",
+        "description": "Choose a syntax highlighting theme"
+      },
+      {
+        "name": "pets",
+        "description": "Choose or hide the terminal pet"
+      },
+      {
+        "name": "mcp",
+        "description": "List MCP tools; use /mcp verbose or /mcp login <name>"
+      },
+      {
+        "name": "apps",
+        "description": "Manage apps"
+      },
+      {
+        "name": "plugins",
+        "description": "Browse plugins"
+      },
+      {
+        "name": "logout",
+        "description": "Log out of Codex"
+      },
+      {
+        "name": "quit",
+        "description": "Exit Codex"
+      },
+      {
+        "name": "exit",
+        "description": "Exit Codex"
+      },
+      {
+        "name": "feedback",
+        "description": "Send logs to maintainers"
+      },
+      {
+        "name": "ps",
+        "description": "List background terminals"
+      },
+      {
+        "name": "stop",
+        "description": "Stop all background terminals"
+      },
+      {
+        "name": "clear",
+        "description": "Clear the terminal and start a new chat"
+      },
+      {
+        "name": "subagents",
+        "description": "Switch between this session's subagents"
+      },
+      {
+        "name": "debug-config",
+        "description": "Show config layers and requirement sources for debugging"
+      },
+      {
+        "name": "debug-m-drop",
+        "description": "DO NOT USE"
+      },
+      {
+        "name": "debug-m-update",
+        "description": "DO NOT USE"
+      }
+    ],
+    "terminalBound": [
+      "resume",
+      "permissions",
+      "agents",
+      "hooks",
+      "mcp",
+      "plugins",
+      "skills",
+      "voice",
+      "theme",
+      "config",
+      "setup-default-sandbox",
+      "keymap",
+      "experimental",
+      "approve",
+      "memories",
+      "import",
+      "new",
+      "archive",
+      "delete",
+      "fork",
+      "worktree",
+      "side",
+      "btw",
+      "copy",
+      "tui",
+      "mention",
+      "daemon",
+      "warnings",
+      "cd",
+      "usage",
+      "title",
+      "statusline",
+      "pets",
+      "feedback",
+      "subagents",
+      "vim",
+      "logout"
+    ],
+    "hidden": [
+      "apps",
+      "debug-config",
+      "debug-m-drop",
+      "debug-m-update"
+    ]
+  }
+}

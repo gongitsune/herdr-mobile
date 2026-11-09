@@ -9,6 +9,48 @@ import java.util.Base64
 import kotlin.test.*
 
 class CodexResolverTest {
+    @Test fun notStartedNeedsVerifiedInventoryAndAnEmptyScreen():Unit=runBlocking {
+        val terminal=Terminal(address="t1",state="live",pid=11,cwd="/project",
+            foreground=Foreground(pid=11,name="codex",argv=listOf("codex")))
+        val peer=FakeCoreTransport()
+        var absent=true
+        var started:Long?=2000
+        var screen="OpenAI Codex (v1)\n› Ask Codex to do anything"
+        var locks=emptyList<String>()
+        peer.intercept={ request ->
+            when(FakeCoreTransport.method(request)) {
+                "machine.exec" -> {
+                    val info=buildJsonObject {
+                        put("process_key","11:1:11:1"); put("no_new_threads",absent)
+                        started?.let { put("process_started_ms",it) }
+                        put("lock_ids",JsonArray(locks.map(::JsonPrimitive)))
+                    }
+                    val data=Base64.getEncoder().encodeToString(info.toString().toByteArray())
+                    peer.respond(request,"""{"code":0,"stdout":"$data","stderr":"","truncated":false,"timed_out":false}"""); true
+                }
+                "terminal.read" -> { peer.respond(request,buildJsonObject { put("text",screen) }.toString()); true }
+                else -> false
+            }
+        }
+        val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+        val client=HcClient(TransportFactory { peer },scope,autoReconnect=false)
+        try {
+            client.connect()
+            val resolver=SessionResolver(client)
+            assertEquals(io.herdrmobile.core.workspace.AgentKind.CODEX,resolver.resolve(terminal).notStarted)
+            absent=false
+            assertNull(resolver.resolve(terminal).notStarted,"An empty candidate list does not prove absence")
+            absent=true; started=null
+            assertNull(resolver.resolve(terminal).notStarted,"An unknown TUI start time stays ambiguous")
+            started=2000; locks=listOf("unresolved-thread")
+            assertNull(resolver.resolve(terminal).notStarted,"An unmatched lock prevents an empty conversation claim")
+            locks=emptyList(); screen="OpenAI Codex (v1)\n› submitted prompt\n› "
+            assertNull(resolver.resolve(terminal).notStarted,"Submitted prompts must never show an empty chat")
+            screen="OpenAI Codex (v1)\nWorked for 1s\n› "
+            assertNull(resolver.resolve(terminal).notStarted)
+        } finally { client.close(); scope.cancel() }
+    }
+
     @Test fun freshThreadPeersRetentionNewThreadAndProcessChange():Unit=runBlocking {
         val terminal=Terminal(address="t1",state="live",pid=11,cwd="/project",foreground=Foreground(pid=11,name="codex",argv=listOf("codex")))
         val peer=FakeCoreTransport()

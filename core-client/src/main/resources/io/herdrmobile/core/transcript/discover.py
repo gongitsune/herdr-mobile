@@ -29,6 +29,38 @@ def environment(pid):
 def report(**fields):
     print(json.dumps(fields, separators=(',', ':')))
 
+def claude_session_files(root, session):
+    # Unlike glob, scandir propagates permission errors: unreadable is not absent.
+    try:
+        with os.scandir(os.path.join(root, 'projects')) as projects:
+            directories = [p.path for p in projects if p.is_dir()]
+    except FileNotFoundError:
+        return []
+    matches = []
+    for directory in directories:
+        path = os.path.join(directory, session + '.jsonl')
+        try:
+            os.stat(path)
+            matches.append(path)
+        except FileNotFoundError:
+            pass
+    return matches
+
+def claude_has_no_messages(path):
+    total = 0
+    with open(path, 'rb') as transcript:
+        for index in range(100001):
+            line = transcript.readline(32 * 1024 * 1024 - total + 1)
+            if not line:
+                return True
+            total += len(line)
+            if total > 32 * 1024 * 1024 or index >= 100000 or not line.endswith(b'\n'):
+                return False
+            row = json.loads(line)
+            if not isinstance(row, dict) or row.get('type') in ('user', 'assistant'):
+                return False
+    return False
+
 def main():
     root_start = stat(terminal)[1]
     scope = environment(terminal).get('HC_SCOPE')
@@ -88,6 +120,7 @@ def main():
     root = env.get('CLAUDE_CONFIG_DIR' if kind == 'CLAUDE_CODE' else 'CODEX_HOME') or os.path.join(home, '.claude' if kind == 'CLAUDE_CODE' else '.codex')
     candidates, exact, open_files, lock_ids = [], None, [], []
     stored, process_started_ms = [], None
+    not_started, no_new_threads = False, False
     if kind == 'CLAUDE_CODE':
         if env.get('CLAUDE_CODE_SKIP_PROMPT_HISTORY') not in (None, '', '0'):
             report(process_key=process_key, reason='Claude transcript recording is disabled'); return
@@ -113,9 +146,12 @@ def main():
                             value //= 36
                         key = key[:200] + '-' + (encoded or '0')
                     preferred = os.path.join(root, 'projects', key, session + '.jsonl')
-                    matches = list(glob.iglob(os.path.join(root, 'projects', '*', session + '.jsonl')))
+                    matches = claude_session_files(root, session)
                     if preferred in matches or len(matches) == 1:
                         exact = {'session_id': session, 'path': preferred if preferred in matches else matches[0]}
+                        not_started = claude_has_no_messages(exact['path'])
+                    elif not matches:
+                        not_started = True
         except (OSError, ValueError):
             pass
         if exact is None and not registry_exists:
@@ -162,6 +198,8 @@ def main():
             stored = codex_candidates(root, cwd, title)
             boot = next(int(line.split()[1]) for line in read('/proc/stat').decode().splitlines() if line.startswith('btime '))
             process_started_ms = boot * 1000 + int(start) * 1000 // os.sysconf('SC_CLK_TCK') + 1000
+            # Use the lower bound of the process start second when proving absence.
+            no_new_threads = codex_has_no_new_threads(root, cwd, process_started_ms - 1000)
         except (OSError, ValueError, sqlite3.Error):
             pass
         if mode == 'candidates' and not glob.glob(os.path.join(root, 'state_*.sqlite')):
@@ -184,7 +222,8 @@ def main():
     if stat(pid)[1] != start or stat(terminal)[1] != root_start:
         report(reason='Agent process changed during evidence read'); return
     report(process_key=process_key, binding=exact, open_files=sorted(set(open_files)), lock_ids=lock_ids,
-           candidates=candidates, stored=stored, process_started_ms=process_started_ms, reason='No unique exact session evidence')
+           candidates=candidates, stored=stored, process_started_ms=process_started_ms,
+           not_started=not_started, no_new_threads=no_new_threads, reason='No unique exact session evidence')
 
 try:
     main()

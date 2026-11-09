@@ -9,6 +9,19 @@ import kotlin.test.*
 class CodexScreenMatchTest {
     private val long="The unique finished response contains enough varied characters to identify this conversation safely."
     private fun candidate(path:String,answer:String=long,prompt:String="question")=CodexScreenTranscript(path,listOf(answer),prompt,prompt to answer)
+    @Test fun emptyStartupScreenRequiresHeaderAndUnsentComposer() {
+        val start="OpenAI Codex (v0.fixture)\nmodel: fixture\n› Ask Codex to do anything"
+        assertTrue(codexScreenNotStarted(start))
+        assertTrue(codexScreenNotStarted("› old prompt\nWorked for 2s\n$start"))
+        assertTrue(codexScreenNotStarted("OpenAI Codex (v1)\n\u001B[2m› \u001B[0m"))
+        for(screen in listOf("", "› ", "OpenAI Codex (v1)",
+            "OpenAI Codex (v1)\n› submitted prompt\n› ",
+            "OpenAI Codex (v1)\n› submitted prompt",
+            "OpenAI Codex (v1)\nWorked for 2s\n› ",
+            "OpenAI Codex (v1)\n• answer\n› ")) {
+            assertFalse(codexScreenNotStarted(screen),screen)
+        }
+    }
     @Test fun longAnswersMustBeWholeUniqueAndAfterLastHeader() {
         val a=candidate("a")
         assertEquals("a",matchCodexScreen("OpenAI Codex (v1)\n• $long",listOf(a)))

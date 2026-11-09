@@ -15,6 +15,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.herdrmobile.android.R
 import io.herdrmobile.android.connection.HostConnections
+import io.herdrmobile.android.ui.theme.ProgramIcon
+import io.herdrmobile.core.workspace.AgentKind
 import io.herdrmobile.core.workspace.Space
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -89,7 +91,6 @@ fun NewTerminalSheet(connections: HostConnections, host: String, space: Space, d
             if (newSpace) OutlinedTextField(folder, { folder = it }, enabled = !busy, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text(stringResource(R.string.space_folder)) }, placeholder = { Text(stringResource(R.string.home_folder)) })
             if (shellOnly && busy) CircularProgressIndicator(Modifier.padding(16.dp))
             if (shellOnly && !busy && error != null) TextButton(onClick = { create(0) }) { Text(stringResource(R.string.retry)) }
-            val icons = listOf(Icons.Default.Terminal, Icons.Default.AutoAwesome, Icons.Default.Code, Icons.Default.Edit)
             listOf(R.string.new_shell, R.string.new_claude, R.string.new_codex, R.string.new_command).forEachIndexed { index, label ->
                 if ((!shellOnly && (newSpace || index != 0)) && (!newSpace || index != 3)) Row(
                     Modifier.fillMaxWidth().clickable(enabled = !busy) {
@@ -98,7 +99,11 @@ fun NewTerminalSheet(connections: HostConnections, host: String, space: Space, d
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    Icon(icons[index], null)
+                    when (index) {
+                        1 -> ProgramIcon(AgentKind.CLAUDE_CODE, Modifier.size(24.dp))
+                        2 -> ProgramIcon(AgentKind.CODEX, Modifier.size(24.dp))
+                        else -> Icon(if (index == 0) Icons.Default.Terminal else Icons.Default.Edit, null)
+                    }
                     Text(stringResource(label), Modifier.weight(1f))
                     if (busy && choice == index) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                 }
