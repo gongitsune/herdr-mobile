@@ -143,4 +143,5 @@
     <string name="new_command">Command…</string>
     <string name="not_repository">Not a Git repository</string>
     <string name="new_command_input">Command</string>
+    <string name="empty_space_create_terminal">Create a terminal with +</string>
 </resources>

@@ -143,4 +143,5 @@
     <string name="new_command">コマンド…</string>
     <string name="not_repository">Git リポジトリではありません</string>
     <string name="new_command_input">コマンド</string>
+    <string name="empty_space_create_terminal">＋ で端末を作成</string>
 </resources>
