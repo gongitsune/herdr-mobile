@@ -10,3 +10,7 @@ https://github.com/mikepenz/multiplatform-markdown-renderer
 Copyright Mike Penz, 2023. Apache License 2.0.
 Includes JetBrains Markdown parser (Apache License 2.0).
 No image-loader, network or syntax-highlighter extensions are enabled.
+
+Phase 5 design references (concepts only; no implementation code copied):
+herdrdev/herdr-layout-examples, chat and threads recipes (Apache-2.0).
+devswha/ovis, DESIGN.md Chat turn and Work block (MIT).

@@ -7,6 +7,8 @@ import io.herdrmobile.core.rpc.HcError
 import io.herdrmobile.core.workspace.AgentKind
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.channels.Channel
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.Closeable
@@ -26,6 +28,17 @@ class TranscriptSource(
     val state:StateFlow<TranscriptState> = mutableState.asStateFlow()
     private val mutableItems=MutableStateFlow<List<ChatItem>>(emptyList())
     val items:StateFlow<List<ChatItem>> = mutableItems.asStateFlow()
+    private val mutableActivity=MutableStateFlow<TurnActivity?>(null)
+    val activity:StateFlow<TurnActivity?> = mutableActivity.asStateFlow()
+    private val polling=TranscriptPolling(pollIntervalMs)
+    private val wake=Channel<Unit>(Channel.CONFLATED)
+    private val nudged=AtomicBoolean()
+    private var projectedRevision=-1L
+    private var revision=0L
+    private var projectedBlocked:Boolean?=null
+    private var projectedActivity:TurnActivity?=null
+    private var lastTail:Pair<Int,Int>?=null
+    private var historyBytes=0L
     private var binding:TranscriptBinding?=null
     private var selected:TranscriptBinding?=null
     private val previewed=mutableSetOf<TranscriptCandidate>()
@@ -45,11 +58,14 @@ class TranscriptSource(
             combine(store.snapshotConnection,store.terminals) { connection,terminals -> connection to terminals.find { it.id==terminalId } }
                 .distinctUntilChangedBy { (connection,t) -> listOf(connection,t?.foreground,t?.pid,t?.status,t?.turn,t?.labels,t?.state,t?.reason) }
                 .collectLatest { (connection,terminal) ->
+                    polling.changed()
+                    wake.trySend(Unit)
                     lock.withLock {
                         if(connection !== lastConnection) resetOnReconnect=true
                         lastConnection=connection
                         if(connection==null || terminal==null) {
                             canFollow=false
+                            mutableActivity.value=null
                             mutableState.value=TranscriptState.Unavailable("Terminal is not connected")
                         }
                     }
@@ -57,8 +73,20 @@ class TranscriptSource(
                 }
         }
         owned.launch {
-            while(isActive) { delay(pollIntervalMs); update(rebind=false) }
+            while(isActive) {
+                val status=store.terminals.value.find { it.id==terminalId }?.status?.state
+                val signalled=withTimeoutOrNull(polling.delayMs(status)) { wake.receive(); true } ?: false
+                val immediate=nudged.getAndSet(false)
+                if(!signalled || immediate) update(rebind=immediate)
+            }
         }
+    }
+    /** Schedule an immediate read after sending, and keep the next 15s of polling fast. */
+    fun nudge() {
+        if(!owned.isActive) return
+        polling.changed()
+        nudged.set(true)
+        wake.trySend(Unit)
     }
     suspend fun refresh() { update(rebind=true) }
     private suspend fun update(rebind:Boolean) = withContext(Dispatchers.Default) { lock.withLock {
@@ -72,6 +100,7 @@ class TranscriptSource(
                 val resolved=evidence.binding ?: chosen
                 if(resolved==null) {
                     canFollow=false
+                    mutableActivity.value=null.withTerminal(terminal)
                     mutableState.value=TranscriptState.Unavailable(evidence.reason)
                     if(binding?.confirmed==true) { binding=null; mutableItems.value=emptyList() }
                     return@withLock
@@ -83,49 +112,77 @@ class TranscriptSource(
                 } else binding=resolved
             }
             val current=binding ?: return@withLock
-            readAppend(current)
+            val caughtUp=readAppend(current)
             if(current.kind==AgentKind.CODEX && !historyLoaded && lines.isNotEmpty()) {
                 val header=parseLines(lines.take(1)).firstOrNull()
                 if(header!=null) {
                     val history=client.rolloutHistory(current,header)
                     historyPrefix=history.first; historyComplete=history.second; historyLoaded=true
+                    historyBytes=historyPrefix.sumOf { it.toByteArray().size.toLong()+1 }
+                    revision++
                 }
             }
-            if(historyPrefix.sumOf { it.toByteArray().size.toLong()+1 }+bytes>32L*1024*1024) {
-                historyPrefix=emptyList(); historyComplete=false
+            if(historyBytes+bytes>32L*1024*1024 && historyPrefix.isNotEmpty()) {
+                historyPrefix=emptyList(); historyBytes=0; historyComplete=false; revision++
             }
-            val rows=withContext(Dispatchers.Default) { projectTranscript(current.kind,historyPrefix+lines,terminal.status?.state=="blocked") }
-            mutableItems.value=if(historyComplete) rows else listOf(ChatItem.TurnMarker(current.sessionId+"/history","Earlier rollout history is unavailable"))+rows
-            if(!historyComplete) mutableState.value=TranscriptState.Ready(current,false)
+            val blocked=terminal.status?.state=="blocked"
+            // Status-only changes may hide/reveal questions. Unchanged polling does no JSON parsing.
+            if(projectedRevision!=revision || projectedBlocked!=blocked) {
+                val rows=projectTranscript(current.kind,historyPrefix+lines,blocked)
+                currentCoroutineContext().ensureActive()
+                if(!owned.isActive) return@withLock
+                projectedActivity=turnActivity(rows)
+                mutableItems.value=if(historyComplete) rows else listOf(ChatItem.TurnMarker(current.sessionId+"/history","Earlier rollout history is unavailable"))+rows
+                projectedRevision=revision; projectedBlocked=blocked
+            }
+            mutableActivity.value=projectedActivity.withTerminal(terminal)
+            mutableState.value=TranscriptState.Ready(current,caughtUp && historyComplete)
         } catch(e:CancellationException) { throw e }
         catch(e:Exception) { mutableState.value=TranscriptState.Failed(connectionError(e)) }
     } }
-    private fun resetReader() { nextLine=1; checkpoint=null; bytes=0; lines.clear(); historyPrefix=emptyList(); historyLoaded=false; historyComplete=true }
-    private suspend fun readAppend(current:TranscriptBinding) {
-        var overlap=checkpoint!=null
-        val offset=if(nextLine>1) nextLine-1 else 1
-        var chunk=try { client.readChunk(current.path,offset=offset,limit=2000,on=current.machine) }
-        catch(e:HcError) {
-            if(e.kind!="invalid_params" || offset==1L) throw e
-            // core rejects an offset beyond EOF before it can report the new line count.
-            resetReader(); overlap=false
-            client.readChunk(current.path,offset=1,limit=2000,on=current.machine)
+    private fun resetReader() {
+        nextLine=1; checkpoint=null; bytes=0; lines.clear(); historyPrefix=emptyList()
+        historyLoaded=false; historyComplete=true; historyBytes=0; lastTail=null
+        projectedActivity=null; revision++
+    }
+    /** Drain pages in one update. A partial EOF is retried on the next poll, never spun on. */
+    private suspend fun readAppend(current:TranscriptBinding):Boolean {
+        var resets=0
+        var verifyCheckpoint=true
+        while(true) {
+            currentCoroutineContext().ensureActive()
+            val overlap=checkpoint!=null && verifyCheckpoint
+            val offset=if(overlap) nextLine-1 else nextLine
+            val before=nextLine
+            val chunk=try { client.readChunk(current.path,offset=offset,limit=2000,on=current.machine) }
+            catch(e:HcError) {
+                if(e.kind!="invalid_params" || offset==1L) throw e
+                if(++resets>3) throw HcError("io","Transcript changed repeatedly while reading")
+                resetReader(); polling.changed(); wake.trySend(Unit); continue
+            }
+            val complete=chunk.text.split('\n').dropLast(1)
+            if(chunk.lines<nextLine-1 || (overlap && complete.firstOrNull()!=checkpoint)) {
+                if(++resets>3) throw HcError("io","Transcript changed repeatedly while reading")
+                resetReader(); polling.changed(); wake.trySend(Unit); continue
+            }
+            verifyCheckpoint=false
+            val append=if(overlap) complete.drop(1) else complete
+            for(line in append) {
+                val size=line.toByteArray().size+1
+                if(bytes+size>32L*1024*1024 || lines.size>=100_000) throw HcError("unsupported","Transcript exceeds the 32MiB/100000-line display limit")
+                bytes+=size; lines+=line; nextLine++
+            }
+            if(append.isNotEmpty()) { revision++; polling.changed(); wake.trySend(Unit) }
+            checkpoint=lines.lastOrNull()
+            val tail=chunk.text.substringAfterLast('\n')
+            val tailSignature=tail.length to tail.hashCode()
+            if(tail.isNotEmpty() && tailSignature!=lastTail) { polling.changed(); wake.trySend(Unit) }
+            lastTail=tailSignature
+            val caughtUp=nextLine>chunk.lines && (chunk.text.isEmpty() || chunk.text.endsWith('\n'))
+            if(caughtUp) return true
+            if(overlap && append.isEmpty() && tail.isEmpty() && nextLine<=chunk.lines) continue
+            if(nextLine==before || (tail.isNotEmpty() && chunk.last>=chunk.lines)) return false
         }
-        var complete=chunk.text.split('\n').dropLast(1)
-        if(chunk.lines<nextLine-1 || (checkpoint!=null && complete.firstOrNull()!=checkpoint)) {
-            resetReader(); overlap=false
-            chunk=client.readChunk(current.path,offset=1,limit=2000,on=current.machine)
-            complete=chunk.text.split('\n').dropLast(1)
-        }
-        val append=if(overlap) complete.drop(1) else complete
-        for(line in append) {
-            bytes+=line.toByteArray().size+1
-            if(bytes>32L*1024*1024 || lines.size>=100_000) throw HcError("unsupported","Transcript exceeds the 32MiB/100000-line display limit")
-            lines+=line; nextLine++
-        }
-        checkpoint=lines.lastOrNull()
-        val caughtUp=nextLine>chunk.lines && (chunk.text.isEmpty() || chunk.text.endsWith('\n'))
-        mutableState.value=TranscriptState.Ready(current,caughtUp)
     }
     suspend fun candidates():List<TranscriptCandidate> = lock.withLock {
         val terminal=store.terminals.value.find { it.id==terminalId } ?: return@withLock emptyList()
@@ -155,5 +212,5 @@ class TranscriptSource(
         }
         refresh()
     }
-    override fun close() { owned.cancel() }
+    override fun close() { owned.cancel(); mutableActivity.value=null }
 }

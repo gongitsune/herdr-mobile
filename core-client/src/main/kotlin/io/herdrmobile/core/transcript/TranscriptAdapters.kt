@@ -49,7 +49,8 @@ private fun projectClaude(all:List<JsonObject>,blocked:Boolean):List<ChatItem> {
         }
     } }
     val eligible=nodes.filterValues { it.text("type")!="progress" && it.text("subtype")!="fork_briefing" }
-    val terminals=eligible.keys.filter { id -> eligible.keys.none { parents[it]==id } }.asReversed()
+    val withChildren=eligible.keys.mapNotNull { parents[it] }.toHashSet()
+    val terminals=eligible.keys.filter { it !in withChildren }.asReversed()
     val terminal=terminals.firstOrNull { id ->
         var at=id; val seen=mutableSetOf<String>(); var message=false
         while(at.isNotEmpty() && seen.add(at)) { if(nodes[at]?.text("type") in setOf("user","assistant")) { message=true; break }; at=parents[at].orEmpty() }
@@ -79,32 +80,34 @@ private fun projectClaude(all:List<JsonObject>,blocked:Boolean):List<ChatItem> {
         r["message"].obj()["content"].arr().map { it.obj() }.filter { it.text("type")=="tool_use" && it.text("id") !in results }.map { it.text("id") }
     }.lastOrNull()
     ordered.forEach { r ->
+        val atEpochMs=recordTime(r)
         val uuid=r.text("uuid"); val type=r.text("type"); val message=r["message"].obj(); val content=message["content"]
         if(type=="user" && !r.flag("isMeta") && !r.flag("isCompactSummary")) {
             val text=contentText(content)
-            if(text.isNotBlank() && !text.startsWith("[Request interrupted")) output[uuid]=ChatItem.UserMessage(uuid,text)
+            if(text.isNotBlank() && !text.startsWith("[Request interrupted")) output[uuid]=ChatItem.UserMessage(uuid,text,atEpochMs)
         }
         if(type=="assistant") content.arr().forEachIndexed { index,value ->
             val block=value.obj()
             val blockIndex=(r["apiBlockIndex"] as? JsonPrimitive)?.intOrNull
             val id=(message.text("id").ifBlank { uuid })+"/"+(blockIndex?.let { (it+index).toString() } ?: "$uuid/$index")
             when(block.text("type")) {
-                "text" -> if(block.text("text").isNotBlank()) output[id]=ChatItem.AssistantText(id,block.text("text"))
-                "thinking" -> if(block.text("thinking").isNotBlank()) output[id]=ChatItem.Thinking(id,block.text("thinking"))
+                "text" -> if(block.text("text").isNotBlank()) output[id]=ChatItem.AssistantText(id,block.text("text"),atEpochMs)
+                "thinking" -> if(block.text("thinking").isNotBlank()) output[id]=ChatItem.Thinking(id,block.text("thinking"),atEpochMs)
                 "tool_use" -> {
                     val call=block.text("id"); val result=results[call]; val name=block.text("name")
+                    val presentation=toolPresentation(AgentKind.CLAUDE_CODE,name,block["input"])
                     output[call]=ChatItem.ToolCall(call,name,block["input"].toString().take(4096),result?.first?.take(64*1024),
-                        if(result==null) { if((positions[uuid] ?: 0)>boundary) ToolState.RUNNING else ToolState.FAILED } else if(result.second) ToolState.FAILED else ToolState.SUCCEEDED)
+                        if(result==null) { if((positions[uuid] ?: 0)>boundary) ToolState.RUNNING else ToolState.FAILED } else if(result.second) ToolState.FAILED else ToolState.SUCCEEDED,presentation.first,presentation.second,atEpochMs)
                     if(blocked && call==pending) {
-                        if(name in setOf("AskUserQuestion","request_user_input")) questions(call,block["input"]).forEach { output[it.id]=it }
-                        else output["$call/approval"]=ChatItem.Question("$call/approval","Waiting for approval: $name",emptyList(),true)
+                        if(name in setOf("AskUserQuestion","request_user_input")) questions(call,block["input"]).forEach { output[it.id]=it.copy(atEpochMs=atEpochMs) }
+                        else output["$call/approval"]=ChatItem.Question("$call/approval","Waiting for approval: $name",emptyList(),true,atEpochMs)
                     }
                 }
             }
         }
         when(r.text("subtype")) {
-            "turn_duration" -> output[uuid]=ChatItem.TurnMarker(uuid,"Turn complete")
-            "compact_boundary" -> output[uuid]=ChatItem.TurnMarker(uuid,"Context compacted")
+            "turn_duration" -> output[uuid]=ChatItem.TurnMarker(uuid,"Turn complete",atEpochMs)
+            "compact_boundary" -> output[uuid]=ChatItem.TurnMarker(uuid,"Context compacted",atEpochMs)
         }
     }
     return output.values.toList()
@@ -121,23 +124,24 @@ private fun projectCodex(records:List<JsonObject>,blocked:Boolean):List<ChatItem
         if(paginated && sequence!=null) { if(sequence<=ordinal) return@forEachIndexed; ordinal=sequence }
         val type=r.text("type"); val p=r["payload"].obj(); val event=if(type=="event_msg") p.text("type") else type
         val row="line:$line"
+        val atEpochMs=recordTime(r)
         when(event) {
             "task_started","turn_started" -> {
                 currentTurn=p.text("turn_id").ifEmpty { row }; turnRows+=mutableSetOf<String>(); turnHasUser=false
-                add(ChatItem.TurnMarker("$currentTurn/start","Turn started"))
+                add(ChatItem.TurnMarker("$currentTurn/start","Turn started",atEpochMs))
             }
-            "task_complete","turn_complete","turn_aborted" -> add(ChatItem.TurnMarker(p.text("turn_id").ifEmpty { currentTurn }+"/end",if(event=="turn_aborted") "Turn interrupted" else "Turn complete"))
+            "task_complete","turn_complete","turn_aborted" -> add(ChatItem.TurnMarker(p.text("turn_id").ifEmpty { currentTurn }+"/end",if(event=="turn_aborted") "Turn interrupted" else "Turn complete",atEpochMs))
             "thread_rolled_back" -> if(!paginated) {
                 repeat(minOf((p["num_turns"] as? JsonPrimitive)?.intOrNull ?: 0,turnRows.size)) { turnRows.removeAt(turnRows.lastIndex).forEach { out.remove(it) } }
                 currentTurn=""
             }
-            "context_compacted" -> add(ChatItem.TurnMarker(row,"Context compacted"))
+            "context_compacted" -> add(ChatItem.TurnMarker(row,"Context compacted",atEpochMs))
             "user_message" -> if(!paginated && p.text("message").isNotBlank()) {
                 if(currentTurn.isEmpty() || turnHasUser) { currentTurn=row; turnRows+=mutableSetOf<String>() }
-                turnHasUser=true; add(ChatItem.UserMessage(row,p.text("message")))
+                turnHasUser=true; add(ChatItem.UserMessage(row,p.text("message"),atEpochMs))
             }
-            "agent_message" -> if(!paginated && p.text("message").isNotBlank()) add(ChatItem.AssistantText(row,p.text("message")))
-            "agent_reasoning" -> if(!paginated && p.text("text").isNotBlank()) add(ChatItem.Thinking(row,p.text("text")))
+            "agent_message" -> if(!paginated && p.text("message").isNotBlank()) add(ChatItem.AssistantText(row,p.text("message"),atEpochMs))
+            "agent_reasoning" -> if(!paginated && p.text("text").isNotBlank()) add(ChatItem.Thinking(row,p.text("text"),atEpochMs))
             "item_completed" -> {
                 val item=p["item"].obj(); val id=p.text("turn_id")+"/"+item.text("id").ifEmpty { row }
                 if(paginated) when(item.text("type")) {
@@ -153,19 +157,19 @@ private fun projectCodex(records:List<JsonObject>,blocked:Boolean):List<ChatItem
                                 val call=ids?.getOrNull(1).str(); val question=ids?.getOrNull(2).str()
                                 out.keys.filter { key -> if(call.isNotEmpty()) key.endsWith("/$call/question/$question") else key.contains("/$answered/question/") }.toList().forEach { out.remove(it) }
                             }
-                        } else add(ChatItem.UserMessage(id,visible))
+                        } else add(ChatItem.UserMessage(id,visible,atEpochMs))
                     }
                     "AgentMessage" -> {
-                        contentText(item["content"]).takeIf { it.isNotBlank() }?.let { add(ChatItem.AssistantText(id,it)) }
-                        if(blocked) questions(id,item).forEach(::add)
+                        contentText(item["content"]).takeIf { it.isNotBlank() }?.let { add(ChatItem.AssistantText(id,it,atEpochMs)) }
+                        if(blocked) questions(id,item).forEach { add(it.copy(atEpochMs=atEpochMs)) }
                     }
-                    "Reasoning" -> item["summary_text"].arr().joinToString("\n") { it.str() }.takeIf { it.isNotBlank() }?.let { add(ChatItem.Thinking(id,it)) }
-                    "ContextCompaction" -> add(ChatItem.TurnMarker(id,"Context compacted"))
+                    "Reasoning" -> item["summary_text"].arr().joinToString("\n") { it.str() }.takeIf { it.isNotBlank() }?.let { add(ChatItem.Thinking(id,it,atEpochMs)) }
+                    "ContextCompaction" -> add(ChatItem.TurnMarker(id,"Context compacted",atEpochMs))
                     "CommandExecution","FileChange","McpToolCall","WebSearch","DynamicToolCall","FunctionCallOutput","Extension" -> {
                         val status=when(item.text("status")) { "completed","success" -> ToolState.SUCCEEDED; "failed","declined" -> ToolState.FAILED; else -> ToolState.RUNNING }
                         val name=if(item.text("type")=="McpToolCall") item.text("server")+"."+item.text("tool") else item.text("type")
                         add(ChatItem.ToolCall(id,name,(item["command"] ?: item["arguments"] ?: item["changes"] ?: JsonNull).toString().take(4096),
-                            (item.text("aggregated_output").ifEmpty { item.text("stdout") }.ifEmpty { contentText(item["result"].obj()["content"]) }).takeIf { it.isNotEmpty() }?.take(64*1024),status))
+                            (item.text("aggregated_output").ifEmpty { item.text("stdout") }.ifEmpty { contentText(item["result"].obj()["content"]) }).takeIf { it.isNotEmpty() }?.take(64*1024),status,atEpochMs=atEpochMs))
                     }
                 }
             }
@@ -174,10 +178,11 @@ private fun projectCodex(records:List<JsonObject>,blocked:Boolean):List<ChatItem
             "function_call","custom_tool_call","local_shell_call" -> {
                 val id=p.text("call_id").ifEmpty { row }; val name=p.text("name").ifEmpty { p.text("type") }
                 val args=p["arguments"] ?: p["input"] ?: p["action"] ?: JsonNull
-                add(ChatItem.ToolCall(id,name,args.str().ifEmpty { args.toString() }.take(4096)))
+                val presentation=toolPresentation(AgentKind.CODEX,name,args)
+                add(ChatItem.ToolCall(id,name,args.str().ifEmpty { args.toString() }.take(4096),verb=presentation.first,target=presentation.second,atEpochMs=atEpochMs))
                 if(blocked && name=="request_user_input") {
                     val input=runCatching { HcJson.parseToJsonElement(args.str()) }.getOrNull()
-                    questions(id,input).forEach(::add)
+                    questions(id,input).forEach { add(it.copy(atEpochMs=atEpochMs)) }
                 }
             }
             "function_call_output","custom_tool_call_output" -> {

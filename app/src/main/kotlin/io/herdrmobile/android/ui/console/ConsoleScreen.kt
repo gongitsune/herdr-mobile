@@ -7,6 +7,13 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import io.herdrmobile.android.ui.theme.ProgramAvatar
+import io.herdrmobile.android.ui.theme.agentStateSentence
+import io.herdrmobile.core.workspace.AgentDetector
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -22,7 +29,7 @@ import io.herdrmobile.android.R
 import io.herdrmobile.android.ui.theme.statusColor
 import io.herdrmobile.core.ConnectionState
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ConsoleScreen(vm: ConsoleViewModel, peek: (ConsoleTerminal) -> Unit, openTerminal: (String, String) -> Unit) {
     val terminals by vm.terminals.collectAsStateWithLifecycle()
@@ -30,8 +37,7 @@ fun ConsoleScreen(vm: ConsoleViewModel, peek: (ConsoleTerminal) -> Unit, openTer
     val filter by vm.filter.collectAsStateWithLifecycle()
     var creating by rememberSaveable { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 88.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item { Text(stringResource(R.string.agents), style = MaterialTheme.typography.headlineSmall) }
+        LazyColumn(contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = filter == null, onClick = { vm.filter.value = null }, label = { Text(stringResource(R.string.all_hosts)) })
                 hosts.forEach { host -> FilterChip(selected = filter == host.host.id, onClick = { vm.filter.value = host.host.id }, label = { Text(host.host.name) }) }
@@ -46,21 +52,24 @@ fun ConsoleScreen(vm: ConsoleViewModel, peek: (ConsoleTerminal) -> Unit, openTer
                             Text(groupRows.size.toString(), style = MaterialTheme.typography.labelLarge)
                         }
                     }
-            items(groupRows, key = { "${it.hostId}:${it.terminal.id}" }) { row ->
-                Card(Modifier.fillMaxWidth().alpha(if (row.stale) 0.45f else 1f).combinedClickable(enabled = !row.stale, onClick = { openTerminal(row.hostId, row.terminal.id) }, onLongClick = { peek(row) })) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (row.stale) Text(stringResource(R.string.stale_terminals), style = MaterialTheme.typography.labelSmall)
-                        StatusChip(row.terminal.status?.state ?: row.terminal.state)
-                        Text(row.terminal.title.ifBlank { row.terminal.name ?: row.terminal.foreground?.name.orEmpty() }, style = MaterialTheme.typography.titleMedium)
-                        Text(row.terminal.cwd, style = MaterialTheme.typography.bodySmall)
-                        Text(row.hostName, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
+            itemsIndexed(groupRows, key = { _, row -> "${row.hostId}:${row.terminal.id}" }) { index, row ->
+                val title = row.terminal.title.ifBlank { row.terminal.name ?: row.terminal.foreground?.name.orEmpty() }
+                SegmentedListItem(onClick = { openTerminal(row.hostId, row.terminal.id) }, onLongClick = { peek(row) },
+                    shapes = ListItemDefaults.segmentedShapes(index, groupRows.size), enabled = !row.stale,
+                    modifier = Modifier.fillMaxWidth().alpha(if (row.stale) 0.45f else 1f),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    leadingContent = { ProgramAvatar(AgentDetector.detect(row.terminal)?.kind) },
+                    supportingContent = { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(if (row.stale) stringResource(R.string.stale_terminals) else agentStateSentence(row.terminal.status?.state, title), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(row.hostName, Modifier.widthIn(max = 96.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall)
+                    } },
+                    trailingContent = { Box(Modifier.size(8.dp).background(statusColor(row.terminal.status?.state.orEmpty()), CircleShape)) }
+                ) { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
                 }
             }
         }
-        FloatingActionButton(onClick = { creating = true }, modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp)) {
+        MediumFloatingActionButton(onClick = { creating = true }, modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd).padding(16.dp)) {
             Icon(Icons.Default.Add, stringResource(R.string.new_terminal))
         }
     }

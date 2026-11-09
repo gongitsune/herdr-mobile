@@ -3,8 +3,11 @@ package io.herdrmobile.core
 import io.herdrmobile.core.model.HcJson
 import io.herdrmobile.core.transcript.*
 import io.herdrmobile.core.wire.Frame
+import io.herdrmobile.core.workspace.AgentKind
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.*
 import org.junit.jupiter.api.Test
 import java.util.Base64
@@ -70,23 +73,179 @@ class TranscriptSourceTest {
             } finally { source.close(); client.close(); scope.cancel() }
         }
     }
-    private class TranscriptPeer(initial:String) {
+    @Test fun claudeAndCodexPublishBlocksBeforeTurnCompletion():Unit=runBlocking {
+        for(kind in listOf(AgentKind.CLAUDE_CODE,AgentKind.CODEX)) withTimeout(8000) {
+            val initial=initialRows(kind)
+            val peer=TranscriptPeer(initial.joinToString("\n",postfix="\n"),kind,"working")
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+            val source=TranscriptSource(client,"t1",scope,20)
+            try {
+                client.connect()
+                source.items.first { it.any { row -> row is ChatItem.UserMessage } }
+                val started=java.time.Instant.parse("2030-01-01T00:00:00Z").toEpochMilli()
+                source.activity.first { it?.running==true && it.startedAtEpochMs==started }
+                var expected=source.items.value.size
+                val additions=liveRows(kind)
+                for((i,line) in additions.take(3).withIndex()) {
+                    peer.text.updateAndGet { it+line+"\n" }
+                    val observed=source.items.first { it.size>expected }
+                    assertEquals(expected+1,observed.size,"$kind block $i must appear before the turn ends")
+                    expected=observed.size
+                    assertTrue(source.activity.value?.running==true)
+                    assertEquals(started,source.activity.value?.startedAtEpochMs)
+                }
+                val rows=source.items.value
+                assertTrue(rows.any { it is ChatItem.Thinking })
+                assertTrue(rows.any { it is ChatItem.ToolCall })
+                assertTrue(rows.any { it is ChatItem.AssistantText && it.markdown=="Answer in progress" })
+                assertTrue(rows.all { it.atEpochMs!=null })
+                peer.text.updateAndGet { it+additions.last()+"\n" }
+                source.items.first { it.any { row -> row is ChatItem.TurnMarker && row.label=="Turn complete" } }
+                peer.statusEvent("idle")
+                source.activity.first { it?.running==false }
+                assertEquals(started,source.activity.value?.startedAtEpochMs)
+            } finally { source.close(); client.close(); scope.cancel() }
+        }
+    }
+
+    @Test fun oneRefreshDrainsMoreThanThreeThousandLinesForBothFormats():Unit=runBlocking {
+        for(kind in listOf(AgentKind.CLAUDE_CODE,AgentKind.CODEX)) withTimeout(15000) {
+            val peer=TranscriptPeer(initialRows(kind).joinToString("\n",postfix="\n"),kind,"working")
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+            val source=TranscriptSource(client,"t1",scope)
+            try {
+                client.connect()
+                source.state.first { it is TranscriptState.Ready && it.complete }
+                peer.offsets.clear()
+                val added=(1..3500).map { index -> when(kind) {
+                    AgentKind.CLAUDE_CODE -> """{"type":"assistant","uuid":"a$index","parentUuid":"${if(index==1) "u" else "a${index-1}"}","sessionId":"fixture-session","message":{"id":"m$index","content":[{"type":"text","text":"block $index"}]}}"""
+                    else -> """{"ordinal":${index+2},"type":"item_completed","payload":{"turn_id":"turn","item":{"id":"a$index","type":"AgentMessage","content":[{"type":"Text","text":"block $index"}]}}}"""
+                } }
+                peer.text.updateAndGet { it+added.joinToString("\n",postfix="\n") }
+                source.refresh()
+                assertEquals(3500,source.items.value.filterIsInstance<ChatItem.AssistantText>().size)
+                assertEquals("block 3500",source.items.value.filterIsInstance<ChatItem.AssistantText>().last().markdown)
+                assertTrue((source.state.value as TranscriptState.Ready).complete)
+                assertTrue(peer.offsets.size>=2,"Must read more than one page within refresh")
+            } finally { source.close(); client.close(); scope.cancel() }
+        }
+    }
+
+    @Test fun checkpointOnlyPageStillMakesProgressAndPartialEofDoesNotSpin():Unit=runBlocking {
+        withTimeout(5000) {
+            val peer=TranscriptPeer(user+"\n",pageSize=1)
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+            val source=TranscriptSource(client,"t1",scope)
+            try {
+                client.connect(); source.state.first { it is TranscriptState.Ready }
+                peer.text.set(user+"\n"+answer+"\n"+"{incomplete")
+                source.refresh()
+                assertEquals(1,source.items.value.filterIsInstance<ChatItem.AssistantText>().size)
+                assertFalse((source.state.value as TranscriptState.Ready).complete)
+                assertTrue(peer.offsets.size<10)
+            } finally { source.close(); client.close(); scope.cancel() }
+        }
+    }
+
+    @Test fun nudgeReadsImmediatelyAndUnchangedPollsKeepThePublishedItems():Unit=runBlocking {
+        withTimeout(5000) {
+            val peer=TranscriptPeer(user+"\n")
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+            val source=TranscriptSource(client,"t1",scope)
+            try {
+                client.connect(); source.state.first { it is TranscriptState.Ready }
+                delay(30)
+                peer.text.set(user+"\n"+answer+"\n")
+                source.nudge()
+                withTimeout(750) { source.items.first { it.any { row -> row is ChatItem.AssistantText } } }
+                source.close()
+                val count=peer.offsets.size
+                source.nudge(); delay(30)
+                assertEquals(count,peer.offsets.size)
+            } finally { source.close(); client.close(); scope.cancel() }
+        }
+        withTimeout(5000) {
+            val peer=TranscriptPeer(user+"\n")
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
+            val source=TranscriptSource(client,"t1",scope,20)
+            try {
+                client.connect(); source.state.first { it is TranscriptState.Ready }
+                val original=source.items.value
+                val count=AtomicInteger()
+                val observer=launch(start=CoroutineStart.UNDISPATCHED) { source.items.drop(1).collect { count.incrementAndGet() } }
+                val before=peer.offsets.size
+                withTimeout(1000) { while(peer.offsets.size<before+3) delay(1) }
+                assertSame(original,source.items.value)
+                assertEquals(0,count.get())
+                observer.cancelAndJoin()
+            } finally { source.close(); client.close(); scope.cancel() }
+        }
+    }
+
+    private fun initialRows(kind:AgentKind):List<String> = if(kind==AgentKind.CLAUDE_CODE) listOf(
+        user.dropLast(1)+",\"timestamp\":\"2030-01-01T00:00:00Z\"}"
+    ) else listOf(
+        """{"ordinal":0,"type":"session_meta","payload":{"id":"fixture-session","history_mode":"paginated"}}""",
+        """{"ordinal":1,"timestamp":"2030-01-01T00:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn"}}""",
+        """{"ordinal":2,"timestamp":"2030-01-01T00:00:00Z","type":"item_completed","payload":{"turn_id":"turn","item":{"id":"u","type":"UserMessage","content":[{"type":"text","text":"Synthetic prompt"}]}}}"""
+    )
+    private fun liveRows(kind:AgentKind):List<String> = if(kind==AgentKind.CLAUDE_CODE) listOf(
+        """{"timestamp":"2030-01-01T00:00:01Z","type":"assistant","uuid":"thinking","parentUuid":"u","sessionId":"fixture-session","message":{"id":"thinking","content":[{"type":"thinking","thinking":"Thinking in progress"}]}}""",
+        """{"timestamp":"2030-01-01T00:00:02Z","type":"assistant","uuid":"tool","parentUuid":"thinking","sessionId":"fixture-session","message":{"id":"tool","content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"echo fixture"}}]}}""",
+        """{"timestamp":"2030-01-01T00:00:03Z","type":"assistant","uuid":"answer","parentUuid":"tool","sessionId":"fixture-session","message":{"id":"answer","content":[{"type":"text","text":"Answer in progress"}]}}""",
+        """{"timestamp":"2030-01-01T00:00:04Z","type":"system","subtype":"turn_duration","uuid":"end","parentUuid":"answer","sessionId":"fixture-session"}"""
+    ) else listOf(
+        """{"ordinal":3,"timestamp":"2030-01-01T00:00:01Z","type":"item_completed","payload":{"turn_id":"turn","item":{"id":"thinking","type":"Reasoning","summary_text":["Thinking in progress"]}}}""",
+        """{"ordinal":4,"timestamp":"2030-01-01T00:00:02Z","type":"item_completed","payload":{"turn_id":"turn","item":{"id":"tool","type":"CommandExecution","command":["echo","fixture"],"status":"in_progress"}}}""",
+        """{"ordinal":5,"timestamp":"2030-01-01T00:00:03Z","type":"item_completed","payload":{"turn_id":"turn","item":{"id":"answer","type":"AgentMessage","content":[{"type":"Text","text":"Answer in progress"}]}}}""",
+        """{"ordinal":6,"timestamp":"2030-01-01T00:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn"}}"""
+    )
+
+    private class TranscriptPeer(initial:String, val kind:AgentKind=AgentKind.CLAUDE_CODE,
+                                 initialStatus:String?=null, val pageSize:Int=2000) {
         val peer=FakeCoreTransport()
         val text=AtomicReference(initial)
         val process=AtomicReference("t1:1:123:2")
         val offsets=ConcurrentLinkedQueue<Long>()
         val probes=AtomicInteger()
+        private val seq=AtomicInteger()
+        val status=AtomicReference(initialStatus)
         @Volatile var exact=true
+        fun statusEvent(word:String) {
+            status.set(word)
+            val message=buildJsonObject {
+                put("method","event"); put("params",buildJsonObject {
+                    put("seq",seq.incrementAndGet()); put("type","status"); put("terminal","t1")
+                    put("data",buildJsonObject { put("status",buildJsonObject { put("state",word) }); put("records",JsonObject(emptyMap())); put("reported",true) })
+                })
+            }
+            peer.send(Frame(2,0,(message.toString()+"\n").toByteArray()))
+        }
         init { peer.intercept={ r ->
             val p=r["params"].obj()
             when(FakeCoreTransport.method(r)) {
                 "events.subscribe" -> {
-                    peer.respond(r,"""{"seq":0,"channel":2,"terminals":[{"address":"t1","state":"live","pid":123,"cwd":"/fixture","foreground":{"pid":123,"name":"claude","argv":["claude"],"cwd":"/fixture"}}]}"""); true
+                    val command=if(kind==AgentKind.CLAUDE_CODE) "claude" else "codex"
+                    val snapshot=buildJsonObject {
+                        put("seq",seq.get()); put("channel",2)
+                        put("terminals",buildJsonArray { add(buildJsonObject {
+                            put("address","t1"); put("state","live"); put("pid",123); put("cwd","/fixture")
+                            status.get()?.let { word -> put("status",buildJsonObject { put("state",word) }) }
+                            put("foreground",buildJsonObject { put("pid",123); put("name",command); put("argv",buildJsonArray { add(command) }); put("cwd","/fixture") })
+                        }) })
+                    }
+                    peer.respond(r,snapshot.toString()); true
                 }
                 "machine.exec" -> {
                     probes.incrementAndGet()
                     val evidence=buildJsonObject {
                         put("process_key",process.get()); put("reason","Ambiguous fixture")
+                        if(exact && kind==AgentKind.CODEX) put("open_files",buildJsonArray { add("/fixture/session.jsonl") })
                         if(exact) put("binding",buildJsonObject { put("session_id","fixture-session"); put("path","/fixture/session.jsonl") })
                         put("candidates",buildJsonArray { add(buildJsonObject { put("session_id","fixture-session"); put("path","/fixture/session.jsonl") }) })
                     }
@@ -100,7 +259,7 @@ class TranscriptSourceTest {
                     if(offset>all.size && offset>1) {
                         peer.send(Frame(0,0,("{\"id\":"+r["id"]+",\"error\":{\"code\":-32602,\"message\":\"offset past EOF\",\"data\":{\"kind\":\"invalid_params\"}}}").toByteArray()))
                     } else {
-                        val given=all.drop((offset-1).toInt()).take(limit)
+                        val given=all.drop((offset-1).toInt()).take(minOf(limit,pageSize))
                         peer.respond(r,buildJsonObject { put("text",given.joinToString("")); put("first",offset); put("last",offset+given.size-1); put("lines",all.size) }.toString())
                     }
                     true

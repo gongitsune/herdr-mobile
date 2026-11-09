@@ -18,7 +18,9 @@ Only terminal-emulator and terminal-view Java/resources are vendored.
   a local or remote process. getPid returns -1 and getCwd returns null.
 - Added host-JVM RemoteSessionTest coverage for ANSI/streamed UTF-8, resize,
   UTF-8 input encoding, remote close and exit callbacks without native loading.
-- TerminalView, renderer, selection code and emulator parsing are unchanged.
+- Removed `final` from TerminalView so the app's TailTerminalView can override
+  local sizing/drawing for a read-only bottom-row crop. The renderer, selection
+  code and emulator parsing remain unchanged. Tail previews never resize the PTY.
 - App RemoteTerminalSession serializes remote writes/resizes, collects AttachSession
   output on the main thread, returns via the flow collector before credit, and
   detaches on screen/lifecycle disposal. Observe mode suppresses writes and resize.

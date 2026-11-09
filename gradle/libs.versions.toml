@@ -1,7 +1,10 @@
 [versions]
 agp = "8.9.1"
 kotlin = "2.1.20"
-compose = "2025.04.01"
+# Latest stable BOM compatible with this SDK/AGP toolchain (newer BOMs need SDK 37).
+compose = "2026.06.01"
+# Stable 1.4 omits Expressive; alpha19+ requires SDK 37 / AGP 9.1.
+material3 = "1.5.0-alpha18"
 [plugins]
 android-library = { id = "com.android.library", version.ref = "agp" }
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -11,7 +14,7 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 [libraries]
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose" }
-compose-material3 = { module = "androidx.compose.material3:material3" }
+compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "material3" }
 activity-compose = { module = "androidx.activity:activity-compose", version = "1.10.1" }
 navigation-compose = { module = "androidx.navigation:navigation-compose", version = "2.8.9" }
 datastore-preferences = { module = "androidx.datastore:datastore-preferences", version = "1.1.4" }

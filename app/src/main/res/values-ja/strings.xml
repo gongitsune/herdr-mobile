@@ -144,4 +144,36 @@
     <string name="workspace_error_kind">ワークスペースの配置を読み込めませんでした（%1$s）。</string>
     <plurals name="space_tabs"><item quantity="one">%d タブ</item><item quantity="other">%d タブ</item></plurals>
     <plurals name="space_panes"><item quantity="one">%d ペイン</item><item quantity="other">%d ペイン</item></plurals>
+    <string name="working_elapsed">作業中…・%1$s</string>
+    <string name="working_ellipsis">作業中…</string>
+    <string name="needs_you">対応が必要</string>
+    <string name="worked_for">%1$d秒間作業</string>
+    <string name="worked">作業内容</string>
+    <string name="tool_ran">実行</string>
+    <string name="tool_read">読込</string>
+    <string name="tool_edited">編集</string>
+    <string name="tool_wrote">作成</string>
+    <string name="tool_searched">検索</string>
+    <string name="tool_fetched">取得</string>
+    <string name="tool_failed">失敗</string>
+    <string name="tool_input">入力</string>
+    <string name="tool_output">出力</string>
+    <string name="receipt_sent">送信済み</string>
+    <string name="receipt_waiting">回答待ち・回答する</string>
+    <string name="receipt_transcript">会話ログで確認</string>
+    <string name="receipt_undelivered">未配信・下書きを保持</string>
+    <string name="live_terminal">ライブ端末・覗き見</string>
+    <string name="open_terminal">全画面の端末を開く</string>
+    <string name="agent_working_on">%1$s で作業中</string>
+    <string name="agent_needs_you">%1$s で対応が必要</string>
+    <string name="agent_finished">%1$s が終了</string>
+    <string name="agent_standing_by">%1$s で待機中</string>
+    <string name="host_actions">ホストの操作</string>
+    <plurals name="work_edits"><item quantity="one">編集 %d 件</item><item quantity="other">編集 %d 件</item></plurals>
+    <plurals name="work_commands"><item quantity="one">実行 %d 件</item><item quantity="other">実行 %d 件</item></plurals>
+    <plurals name="work_tools"><item quantity="one">%d 件のツール</item><item quantity="other">%d 件のツール</item></plurals>
+    <plurals name="work_failures"><item quantity="one">失敗 %d 件</item><item quantity="other">失敗 %d 件</item></plurals>
+    <string name="writing">回答を作成中</string>
+    <string name="context_compacted">コンテキストが圧縮されました</string>
+    <string name="history_missing">過去の会話履歴は取得できません</string>
 </resources>

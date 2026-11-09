@@ -144,4 +144,36 @@
     <string name="workspace_error_kind">Workspace layout could not be read (%1$s).</string>
     <plurals name="space_tabs"><item quantity="one">%d tab</item><item quantity="other">%d tabs</item></plurals>
     <plurals name="space_panes"><item quantity="one">%d pane</item><item quantity="other">%d panes</item></plurals>
+    <string name="working_elapsed">Working… · %1$s</string>
+    <string name="working_ellipsis">Working…</string>
+    <string name="needs_you">Needs you</string>
+    <string name="worked_for">Worked for %1$ds</string>
+    <string name="worked">Worked</string>
+    <string name="tool_ran">Ran</string>
+    <string name="tool_read">Read</string>
+    <string name="tool_edited">Edited</string>
+    <string name="tool_wrote">Wrote</string>
+    <string name="tool_searched">Searched</string>
+    <string name="tool_fetched">Fetched</string>
+    <string name="tool_failed">failed</string>
+    <string name="tool_input">Input</string>
+    <string name="tool_output">Output</string>
+    <string name="receipt_sent">Sent</string>
+    <string name="receipt_waiting">Waiting for your answer · Answer</string>
+    <string name="receipt_transcript">Seen in conversation log</string>
+    <string name="receipt_undelivered">Not delivered · draft retained</string>
+    <string name="live_terminal">Live terminal · Peek</string>
+    <string name="open_terminal">Open full terminal</string>
+    <string name="agent_working_on">Working on %1$s</string>
+    <string name="agent_needs_you">Needs you in %1$s</string>
+    <string name="agent_finished">Finished %1$s</string>
+    <string name="agent_standing_by">Standing by in %1$s</string>
+    <string name="host_actions">Host actions</string>
+    <plurals name="work_edits"><item quantity="one">%d edit</item><item quantity="other">%d edits</item></plurals>
+    <plurals name="work_commands"><item quantity="one">%d command</item><item quantity="other">%d commands</item></plurals>
+    <plurals name="work_tools"><item quantity="one">%d tool</item><item quantity="other">%d tools</item></plurals>
+    <plurals name="work_failures"><item quantity="one">%d failed</item><item quantity="other">%d failed</item></plurals>
+    <string name="writing">Writing</string>
+    <string name="context_compacted">Context compacted</string>
+    <string name="history_missing">Earlier conversation history is unavailable</string>
 </resources>

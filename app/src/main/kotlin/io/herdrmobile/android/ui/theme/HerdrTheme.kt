@@ -37,6 +37,7 @@ fun statusColor(status: String): Color {
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun HerdrTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
     val colors = if (dark) darkColorScheme(
@@ -58,6 +59,6 @@ fun HerdrTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () ->
     }
     SideEffect { TerminalColors.COLOR_SCHEME.updateWith(AtomPalette.terminalProperties(dark)) }
     CompositionLocalProvider(LocalHerdrDark provides dark) {
-        MaterialTheme(colorScheme = colors, shapes = Shapes(small = RoundedCornerShape(7.dp), medium = RoundedCornerShape(10.dp), large = RoundedCornerShape(14.dp)), content = content)
+        MaterialExpressiveTheme(colorScheme = colors, motionScheme = MotionScheme.expressive(), shapes = Shapes(extraSmall = RoundedCornerShape(12.dp), small = RoundedCornerShape(16.dp), medium = RoundedCornerShape(20.dp), large = RoundedCornerShape(28.dp), extraLarge = RoundedCornerShape(32.dp)), content = content)
     }
 }

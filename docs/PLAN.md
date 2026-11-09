@@ -262,15 +262,18 @@ enum class ToolState { RUNNING, SUCCEEDED, FAILED }
 data class ChatOption(val label: String, val description: String? = null, val keys: List<String> = emptyList())
 sealed interface ChatItem {
     val id: String
-    data class UserMessage(override val id: String, val text: String) : ChatItem
-    data class AssistantText(override val id: String, val markdown: String) : ChatItem
-    data class Thinking(override val id: String, val text: String) : ChatItem
+    val atEpochMs: Long?
+    data class UserMessage(override val id: String, val text: String, override val atEpochMs: Long? = null) : ChatItem
+    data class AssistantText(override val id: String, val markdown: String, override val atEpochMs: Long? = null) : ChatItem
+    data class Thinking(override val id: String, val text: String, override val atEpochMs: Long? = null) : ChatItem
     data class ToolCall(override val id: String, val name: String, val inputSummary: String,
-                        val result: String? = null, val state: ToolState = ToolState.RUNNING) : ChatItem
+                        val result: String? = null, val state: ToolState = ToolState.RUNNING,
+                        val verb: String? = null, val target: String? = null, override val atEpochMs: Long? = null) : ChatItem
     data class Question(override val id: String, val prompt: String, val options: List<ChatOption>,
-                        val approval: Boolean = false) : ChatItem
-    data class TurnMarker(override val id: String, val label: String) : ChatItem
+                        val approval: Boolean = false, override val atEpochMs: Long? = null) : ChatItem
+    data class TurnMarker(override val id: String, val label: String, override val atEpochMs: Long? = null) : ChatItem
 }
+data class TurnActivity(val running: Boolean, val startedAtEpochMs: Long?, val lastStep: String?)
 data class TranscriptBinding(val kind: AgentKind, val sessionId: String, val path: String,
                              val processKey: String, val machine: String? = null, val confirmed: Boolean = false)
 data class TranscriptCandidate(val kind: AgentKind, val sessionId: String, val path: String,
@@ -285,6 +288,8 @@ class TranscriptSource(client: HcClient, terminalId: String, scope: CoroutineSco
                        pollIntervalMs: Long = 1500) : java.io.Closeable {
     val state: StateFlow<TranscriptState>
     val items: StateFlow<List<ChatItem>>
+    val activity: StateFlow<TurnActivity?>
+    fun nudge()
     suspend fun refresh()
     suspend fun candidates(): List<TranscriptCandidate>
     suspend fun preview(candidate: TranscriptCandidate): List<ChatItem>
@@ -311,6 +316,112 @@ suspend fun listFiles(cwd: String, path: String = ".", on: String? = null): List
 suspend fun readFile(path: String, cwd: String? = null, offset: Long = 1,
                      limit: Int = 2000, on: String? = null): FileChunk
 ```
+
+## Phase 5: ライブなチャット ＋ 全画面活用の Material 3 Expressive UI
+
+### 背景（ユーザー指摘と調査結果）
+- 「チャットは回答が完全に終わらないと表示されない」。
+- herdr-app のチャット風 UI は herdrdev/herdr-layout-examples の `chat`（Apache-2.0）。
+  - これは会話ログを読まない。agent を「チームメイト」として扱い、feed に状態文を一行ずつ並べる（Working on tab / Needs you in tab / Finished tab / Standing by in tab）。
+  - thread 欄にはその tab のライブのターミナルを並べる。
+  - `threads` レイアウトも同様で、ライブのターミナルの下に composer を置く。
+- 会話ログは「ブロック単位」でしか追記されない。Claude Code は text/tool_use ごと、Codex は item ごと。トークン単位のストリーミングは原理的に不可能（Heeler も同じ）。
+  - したがってライブ感は「herdr-app と同じくライブのターミナルを見せる」ことで補う。
+- 既知の不具合：`TranscriptSource.readAppend` は 1 回のポーリングで 2000 行しか読まない。
+  - 長い会話ログでは最新に追いつくまで何周も（1.5 秒 × N）かかる。
+  - その間 `complete=false` のままになり、表示が遅れる。
+
+### codex-a（core-client）
+1. **追いつき読み**：1 回の update で末尾まで読み切る（チャンクを繰り返す）。
+   - 初回は Heeler と同様に「末尾 1 MiB 相当」から開始してもよい。その場合、ターンの途中から始まる扱いを正しくする。
+   - 上限 32 MiB / 100k 行は維持。
+2. **適応ポーリング**（Heeler の間隔に合わせる）：
+   - Terminal の status が working/blocked のとき、または変化・送信・status 変化から 15 秒間は 1 秒間隔。
+   - それ以外は 4 秒間隔。
+   - `fun nudge()`（送信直後に呼ぶ。即時読み＋ 15 秒の高速ウィンドウ）を公開する。
+3. 新しい行が無いポーリングでは再プロジェクションしない（items を再発行しない）。
+4. **進行中ターン情報**を公開する：
+   - `val activity: StateFlow<TurnActivity?>`
+   - `data class TurnActivity(val running: Boolean, val startedAtEpochMs: Long?, val lastStep: String?)`
+   - 開始時刻は記録の `timestamp`（ホスト時計）。
+   - `lastStep` は最後の tool 名や「Thinking」などの短い文字列。
+5. **テスト**：
+   - フェイククライアントで行を 1 行ずつ追記していき、各ポーリングで items が逐次増えることを確認する（Claude・Codex 両方）。
+   - 3000 行以上の会話ログを 1 回の update で読み切ることも確認する。
+
+### Phase 5 公開 API 補足（codex-a）
+- Phase 4 API 節の ChatItem 全型に atEpochMs: Long? = null を末尾追加（ホスト記録の timestamp、欠落・不正値は null）。
+- ToolCall は verb: String? = null / target: String? = null も追加。完全一致の既知 ID のみを意味付けし、未知 ID は両方 null。
+- TranscriptSource.activity: StateFlow<TurnActivity?> と fun nudge() を追加。nudge は読みを即時予約し、15 秒の高速ウィンドウを延長する。
+- 適応間隔は working/blocked または変化後15秒に1秒、それ以外4秒。既存 pollIntervalMs 引数は互換のため維持し、1000未満の指定では検証用に間隔を短縮できる。
+- TurnActivity.startedAtEpochMs と ChatItem.atEpochMs は端末ローカル時計で補完しない。activity は新規行がない場合でも terminal status に追従する。
+
+### codex-b（app / Gradle / CI）
+- **依存**：
+  - Compose BOM を Material3 Expressive API（`MaterialExpressiveTheme`、`MotionScheme.expressive()`、`ButtonGroup`/`ToggleButton`、`LoadingIndicator`、`FlexibleTopAppBar`、`ShortNavigationBar`/`WideNavigationRail`、`FloatingToolbar` など）を含む版に上げる。
+    - 原則は安定版の最新。alpha が必須なら版を明記して報告する。
+  - compileSdk 36 が必要なら `~/Android/Sdk` に `platforms;android-36` と `build-tools;36.0.0` を sdkmanager で入れる（ユーザー承認済みの SDK 範囲内、sudo 不要）。
+    - CI の setup-android の `packages` も同じく更新する。
+  - Kotlin/AGP の更新が必要なら最小限にとどめる。
+- **テーマ**：`MaterialExpressiveTheme`（atom-one-dark の配色は維持）、expressive の motionScheme と shapes を使う。edge-to-edge。
+- **エージェント詳細（全画面を使う）**：
+  - 上部：独立した行（戻る行・エラー行・セグメント行）を廃止する。
+    - 1 本のコンパクトなトップバーにまとめる：戻る、agent 名＋状態、Terminal/Chat の connected `ButtonGroup`（アイコンのみ可）、overflow。
+    - Chat ではスクロールで隠れる（enterAlways）。
+    - エラー・再接続は必要なときだけ細いバナーで出す。
+  - 下部：
+    - composer は丸いピル型の入力欄＋送信ボタンにする（threads の composer 風）。
+    - キー行（Esc/Tab/Ctrl/矢印/^C/Enter）は Terminal 表示時のみ出す。小さい `HorizontalFloatingToolbar` かコンパクトな行にする。
+    - Chat 表示では隠す。
+  - Chat 本文：
+    - 横の余白は 12dp 程度。assistant のテキストは全幅（カードにしない）。user は最大幅 85% のバブル。
+    - tool 呼び出しは 1 行のコンパクトな行にする。連続する tool はまとめて折りたたむ（「n 件のツール」）。
+    - 完了済みターンの途中経過は折りたたみ、プロンプトと最終回答だけを常に表示する（Heeler 方式）。
+  - **ライブ活動**（herdr-app chat の「live terminals」をモバイル化）：
+    - agent が working のとき、タイムライン末尾に「Working · m:ss」と最後のステップを出す。`TurnActivity` と expressive の `LoadingIndicator` を使う。
+    - その下に、既存の observe attach（ObservePreview 相当、読み取り専用）でターミナル下端の数行をライブ表示する。
+    - タップで Terminal に切り替える。blocked のときは Approval/Question カードを優先する。
+  - 送信後に `transcript.nudge()` を呼ぶ。
+- **Agents/Spaces/Hosts**：
+  - 背の高いカードをやめ、密度の高いリスト行にする。
+    - 行の中身：プログラムアイコン、タイトル、状態文、ホスト。状態文は herdr-app chat 風（「〜で作業中」「対応が必要」など、en/ja）。
+    - グループは expressive の角丸セグメントリストにする。
+  - タイトルは折りたたまれる大きなトップバー（`LargeFlexibleTopAppBar` 等）。
+  - ナビは `ShortNavigationBar`。幅 600dp 以上では `WideNavigationRail` に切り替える（折りたたみ端末やタブレット）。
+  - FAB は expressive の FAB（または FAB メニュー）にする。
+- 既存のテスト・lint を通す。必要なら UI ロジックの単体テストを追加する（ツールのグルーピングとターンの折りたたみ）。
+
+### Phase 5 追補：Ovis（devswha/ovis, MIT）の考え方を取り入れる
+参考にするのは考え方だけで、コードはコピーしない。読むなら次の 2 か所。
+- `scratchpad/ref/ovis/DESIGN.md` の「Chat turn」と「Work block」節
+- `docs/guide.md`
+
+**codex-a（core-client）**
+- `ChatItem.ToolCall` に `verb: String?` と `target: String?` を追加する（デフォルト null、後方互換）。
+  - verb はツール ID の完全一致で決める。
+    - Claude: Bash→Ran（command）、Read→Read（file_path）、Edit/MultiEdit→Edited、Write→Wrote、Grep/Glob→Searched（pattern）、WebFetch→Fetched（url）
+    - Codex: exec_command/shell/local_shell_call→Ran（cmd）、apply_patch→Edited（パッチ内の最初のファイル＋件数）
+  - 未知のツールは null にする（UI はツール名を出す）。
+- `UserMessage`、`AssistantText`、`ToolCall`、`TurnMarker` に `atEpochMs: Long? = null`（記録の timestamp）を追加する。UI が「Worked for 7s」を計算するのに使う。
+- 余力があれば、パースを差分化する（新しい行だけを状態に畳み込む）。Ovis では全体を再パースした場合に比べて約 21 倍速かった。結果は全体再パースと一致させ、テストで同値性を確認すること。
+
+**codex-b（app）**
+- 表示の作法（Ovis 準拠）
+  - user は右寄せの控えめなカード（最大幅 80%、アバターや名前は付けない）。assistant は見出しなしの地の文（Markdown）。
+  - 「Turn started / Turn complete」の区切り線は出さない。やりとりの間は余白で区切る。compaction と「履歴なし」の目印だけは残す。
+- **Work block**：ターン内の連続したツール群を 1 ブロックにまとめる。
+  - ヘッダーは `▸ Worked for 7s · 2 edits · 3 commands` の形にする。
+  - 各行は caret＋動詞＋対象（`▸ Ran ./gradlew test`、`▸ Edited app/…/Chat.kt`）。対象は等幅フォント。失敗は赤字で「failed」を付ける。
+  - 行をタップすると入力と出力を展開する。
+  - 合間の地の文（ナレーション）は、走行中は通常の文、終わったら控えめな小さめの文にする。
+  - 終わったターンは work をヘッダー 1 行に畳む。最終回答は畳みの外に常に出す。
+- **走行中のヘッダー**
+  - working のときは、ドットが点滅する「Working…」に経過時間を添える（TurnActivity）。blocked のときは止まった黄色のドットで「対応が必要」。
+  - ちらつき対策を入れる。回答の直後に status が遅れて変わるので、新しいヘッダーを出すのは idle を確認してから 800ms 待ってから。逆に回答が読めるまでは最大 2 秒、ターンを走行中のまま保つ。
+- **送信の結果表示**：送ったメッセージのバブルの下に、控えめな 1 行を出す。
+  - 状態は「送信済み」「回答待ち（Approval/Question カードへ飛ぶ）」「会話ログで確認」「未配信（入力欄に文字が残っている場合）」の 4 つ。
+  - 根拠がなければ「完了」とは言わない。
+- **ターミナルの覗き見**：作業中のライブ表示をタップしたとき、またはメニューから開いたとき、チャットの上にボトムシートでライブのターミナルを出す（Ovis の terminal peek）。全画面の Terminal 切替とは別にする。
 
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。

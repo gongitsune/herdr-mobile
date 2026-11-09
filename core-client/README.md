@@ -159,3 +159,39 @@ Phase 4 integration tests use only `herdr-mobile-it`, label their own terminals,
 create synthetic agent process evidence/JSONL and a throwaway git index under
 `/tmp`, and clean up those terminals/files. They never commit, write the desktop
 layout document, or copy the user's actual `~/.claude` / `~/.codex` logs.
+
+
+## Phase 5: live transcript following
+
+One refresh drains all available pages (2000 lines per RPC) through the current
+EOF, still bounded by 32 MiB / 100,000 lines. It verifies the last accepted line
+once per update, then advances without letting a checkpoint-only byte-limited
+page block progress. An unfinished EOF waits for the next poll; repeated rewrites
+are bounded and reported. Appends are published before a turn completes, at the
+agent's persisted text/tool/item boundaries, not as per-token streaming.
+
+Polling is 1s for Working/Blocked and for 15s after a data/status change or
+`nudge()`, then 4s while quiet. `nudge()` schedules an immediate read and can be
+called directly after Send; repeated requests are coalesced and closing the source
+stops them. The existing `pollIntervalMs` argument remains compatible; a value
+below 1000 shortens the fast interval for tests, and the quiet interval is 4x that.
+Scheduling uses a monotonic client clock. Unchanged polls do not reparse or publish
+`items`; status-only updates can still hide/show Blocked questions and update
+`activity`.
+
+`activity: StateFlow<TurnActivity?>` exposes running, recorded turn-start time and
+a short last step such as Thinking or a tool name. Its start and every
+`ChatItem.atEpochMs` come from the host record's timestamp, never a local-time
+substitute; absent/malformed timestamps stay null. All old ChatItem constructors
+remain valid with default-null metadata.
+
+ToolCall also exposes optional `verb` and `target`. Only complete, case-sensitive
+known tool identifiers match the table in PLAN: no substrings, prefixes, or inferred
+meaning for unknown tools. Patch targets show the first file and additional count.
+Unknown identifiers retain null metadata so the UI can show the raw tool name.
+These presentation ideas follow Ovis's design documentation; no code was copied.
+
+Changed transcripts still rebuild their semantic branch/revert projection. This
+phase skips that work entirely for unchanged reads and makes Claude leaf detection
+linear; incremental semantic parsing is deferred rather than risking different
+rewind/compaction results. No speedup relative to Ovis is claimed.
