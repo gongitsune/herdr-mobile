@@ -8,12 +8,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -23,23 +21,13 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import io.herdrmobile.android.BuildConfig
 import io.herdrmobile.android.R
 import io.herdrmobile.android.ui.chat.ChatMarkdown
+import io.herdrmobile.android.ui.settings.SettingsGroupTitle
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
 @Composable
-fun UpdateDrawerEntry(vm: UpdateViewModel, open: () -> Unit) {
-    val state by vm.state.collectAsStateWithLifecycle()
-    TextButton(onClick = open, modifier = Modifier.fillMaxWidth()) {
-        Icon(Icons.Default.SystemUpdate, null, Modifier.padding(end = 8.dp))
-        Text(state.available?.let { stringResource(R.string.update_available, it.release.tag) }
-            ?: stringResource(R.string.updates), modifier = Modifier.weight(1f))
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun UpdateDialogs(vm: UpdateViewModel, open: Boolean, dismiss: () -> Unit) {
+fun UpdateDialogs(vm: UpdateViewModel) {
     val state by vm.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.permissionReturned() }
@@ -53,55 +41,6 @@ fun UpdateDialogs(vm: UpdateViewModel, open: Boolean, dismiss: () -> Unit) {
         if (message != null) {
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             vm.clearMessage()
-        }
-    }
-    if (open) ModalBottomSheet(onDismissRequest = dismiss) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(stringResource(R.string.updates), style = MaterialTheme.typography.titleLarge)
-            Text(stringResource(R.string.update_current, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE), style = MaterialTheme.typography.bodySmall)
-            Text(stringResource(R.string.update_channel), style = MaterialTheme.typography.titleSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                UpdateChannel.entries.forEach { channel ->
-                    FilterChip(selected = state.preferences.channel == channel,
-                        onClick = { vm.setChannel(channel) }, enabled = state.loaded && state.phase == UpdatePhase.IDLE,
-                        label = { Text(stringResource(if (channel == UpdateChannel.STABLE) R.string.update_stable else R.string.update_nightly)) })
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.update_check_startup), Modifier.weight(1f))
-                Switch(checked = state.preferences.checkOnStartup, onCheckedChange = vm::setCheckOnStartup, enabled = state.loaded)
-            }
-            OutlinedButton(onClick = { vm.check() }, enabled = state.loaded && !state.checking && state.phase == UpdatePhase.IDLE) {
-                if (state.checking) CircularProgressIndicator(Modifier.size(18.dp).padding(end = 4.dp), strokeWidth = 2.dp)
-                Text(stringResource(if (state.checking) R.string.update_checking else R.string.update_check_now))
-            }
-            state.available?.let { update ->
-                HorizontalDivider()
-                Text(stringResource(R.string.update_available, update.release.tag), style = MaterialTheme.typography.titleMedium)
-                update.release.publishedAt?.let { date ->
-                    val formatted = remember(date) { runCatching { OffsetDateTime.parse(date).format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)) }.getOrDefault(date) }
-                    Text(stringResource(R.string.update_published, formatted), style = MaterialTheme.typography.bodySmall)
-                }
-                update.shortSha?.let { Text(stringResource(R.string.update_commit, it), style = MaterialTheme.typography.bodySmall) }
-                when (state.phase) {
-                    UpdatePhase.DOWNLOADING -> {
-                        LinearProgressIndicator(progress = { (state.downloadedBytes.toFloat() / update.asset.size).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                        Text(stringResource(R.string.update_progress, state.downloadedBytes * 100 / update.asset.size))
-                        TextButton(onClick = vm::cancelDownload) { Text(stringResource(R.string.cancel)) }
-                    }
-                    UpdatePhase.INSTALLING -> {
-                        LinearProgressIndicator(Modifier.fillMaxWidth())
-                        Text(stringResource(R.string.update_installing))
-                    }
-                    UpdatePhase.WAITING_PERMISSION -> Text(stringResource(R.string.update_permission_help))
-                    UpdatePhase.IDLE -> Button(onClick = vm::downloadAndInstall, enabled = !state.checking) {
-                        Text(stringResource(R.string.update_download_install))
-                    }
-                }
-                Text(stringResource(R.string.update_release_notes), style = MaterialTheme.typography.titleSmall)
-                ChatMarkdown(update.release.body?.takeIf { it.isNotBlank() } ?: stringResource(R.string.update_no_notes))
-            }
-            TextButton(onClick = dismiss) { Text(stringResource(R.string.close)) }
         }
     }
     if (state.phase == UpdatePhase.WAITING_PERMISSION) AlertDialog(
@@ -118,6 +57,71 @@ fun UpdateDialogs(vm: UpdateViewModel, open: Boolean, dismiss: () -> Unit) {
         }) { Text(stringResource(R.string.settings)) } },
         dismissButton = { TextButton(onClick = vm::cancelInstallPermission) { Text(stringResource(R.string.cancel)) } },
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun UpdateScreen(vm: UpdateViewModel) {
+    val state by vm.state.collectAsStateWithLifecycle()
+    // ListItem and SettingsGroupTitle already provide their own 16dp horizontal inset.
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        OutlinedCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Text(stringResource(R.string.update_current, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
+                Modifier.padding(16.dp), style = MaterialTheme.typography.titleMedium)
+        }
+        state.available?.let { update ->
+            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.update_available, update.release.tag), style = MaterialTheme.typography.titleMedium)
+                    update.release.publishedAt?.let { date ->
+                        val formatted = remember(date) {
+                            runCatching { OffsetDateTime.parse(date).format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)) }.getOrDefault(date)
+                        }
+                        Text(stringResource(R.string.update_published, formatted), style = MaterialTheme.typography.bodySmall)
+                    }
+                    update.shortSha?.let { Text(stringResource(R.string.update_commit, it), style = MaterialTheme.typography.bodySmall) }
+                    when (state.phase) {
+                        UpdatePhase.DOWNLOADING -> {
+                            LinearProgressIndicator(progress = { (state.downloadedBytes.toFloat() / update.asset.size).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                            Text(stringResource(R.string.update_progress, state.downloadedBytes * 100 / update.asset.size))
+                            TextButton(onClick = vm::cancelDownload) { Text(stringResource(R.string.cancel)) }
+                        }
+                        UpdatePhase.INSTALLING -> {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            Text(stringResource(R.string.update_installing))
+                        }
+                        UpdatePhase.WAITING_PERMISSION -> Text(stringResource(R.string.update_permission_help))
+                        UpdatePhase.IDLE -> Button(onClick = vm::downloadAndInstall, enabled = !state.checking) {
+                            Text(stringResource(R.string.update_download_install))
+                        }
+                    }
+                    Text(stringResource(R.string.update_release_notes), style = MaterialTheme.typography.titleSmall)
+                    ChatMarkdown(update.release.body?.takeIf { it.isNotBlank() } ?: stringResource(R.string.update_no_notes))
+                }
+            }
+        }
+        SettingsGroupTitle(stringResource(R.string.settings))
+        Text(stringResource(R.string.update_channel), Modifier.padding(horizontal = 16.dp),
+            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            UpdateChannel.entries.forEachIndexed { index, channel ->
+                SegmentedButton(selected = state.preferences.channel == channel,
+                    onClick = { vm.setChannel(channel) }, enabled = state.loaded && state.phase == UpdatePhase.IDLE,
+                    shape = SegmentedButtonDefaults.itemShape(index, UpdateChannel.entries.size)) {
+                    Text(stringResource(if (channel == UpdateChannel.STABLE) R.string.update_stable else R.string.update_nightly))
+                }
+            }
+        }
+        ListItem(colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            headlineContent = { Text(stringResource(R.string.update_check_startup)) }, trailingContent = {
+            Switch(checked = state.preferences.checkOnStartup, onCheckedChange = vm::setCheckOnStartup, enabled = state.loaded)
+        })
+        OutlinedButton(onClick = { vm.check() }, modifier = Modifier.padding(horizontal = 16.dp),
+            enabled = state.loaded && !state.checking && state.phase == UpdatePhase.IDLE) {
+            if (state.checking) CircularProgressIndicator(Modifier.size(18.dp).padding(end = 4.dp), strokeWidth = 2.dp)
+            Text(stringResource(if (state.checking) R.string.update_checking else R.string.update_check_now))
+        }
+    }
 }
 
 private fun messageResource(message: UpdateMessage): Int = when (message) {

@@ -5,12 +5,6 @@ import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
 import io.herdrmobile.android.ui.files.*
 import io.herdrmobile.core.workspace.Space
-import android.Manifest
-import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
-import android.provider.Settings
-import io.herdrmobile.android.MainActivity
 
 import androidx.core.content.edit
 import androidx.compose.foundation.horizontalScroll
@@ -20,12 +14,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
+import io.herdrmobile.android.ui.settings.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
@@ -58,14 +53,18 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
         UpdateViewModel(app.updateSettings, app.updateNetwork, app.updateInstaller,
             BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong(), claimStartupCheck = app::claimUpdateStartup)
     })
-    var updatesOpen by rememberSaveable { mutableStateOf(false) }
-    UpdateDialogs(updates, updatesOpen) { updatesOpen = false }
+    val updateState by updates.state.collectAsStateWithLifecycle()
+    UpdateDialogs(updates)
     val preferences = LocalContext.current.getSharedPreferences("agent-screen", 0)
     var host by rememberSaveable { mutableStateOf(preferences.getString("host", null)) }
     var terminal by rememberSaveable { mutableStateOf(preferences.getString("terminal", null)) }
     var selectedSpaceId by rememberSaveable { mutableStateOf<String?>(null) }
     var emptiedSpace by remember { mutableStateOf<Pair<String, Space>?>(null) }
-    var settings by rememberSaveable { mutableStateOf(false) }
+    var settingsStack by rememberSaveable(stateSaver = listSaver<List<SettingsPage>, String>(
+        save = { pages -> pages.map { it.name } },
+        restore = { names -> names.map { SettingsPage.valueOf(it) } },
+    )) { mutableStateOf(emptyList()) }
+    val settings = settingsStack.isNotEmpty()
     val drawer = rememberDrawerState(if (terminal == null) DrawerValue.Open else DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val workspaces by app.connections.workspaces.collectAsStateWithLifecycle()
@@ -130,7 +129,7 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
     val hostsVm: HostsViewModel = viewModel(factory = factory { HostsViewModel(app.hosts, app.connections) })
     fun open(hostId: String, terminalId: String) {
         emptiedSpace = null
-        host = hostId; terminal = terminalId; settings = false
+        host = hostId; terminal = terminalId; settingsStack = emptyList()
         val space = workspaces.filter { it.hostId == hostId }.flatMap { it.spaces }.find { it.tabs.any { tab -> tab.panes.any { it.terminal.id == terminalId || it.subAgents.any { child -> child.terminal.id == terminalId } } } }
         selectedSpaceId = space?.id
         space?.tabs?.find { it.panes.any { it.terminal.id == terminalId || it.subAgents.any { child -> child.terminal.id == terminalId } } }?.let { tab ->
@@ -145,7 +144,7 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
         if (pane != null) {
             open(hostId, pane.terminal.id)
         } else {
-            host = hostId; terminal = null; selectedSpaceId = space.id; settings = false
+            host = hostId; terminal = null; selectedSpaceId = space.id; settingsStack = emptyList()
             preferences.edit { putString("host", hostId); remove("terminal") }
             scope.launch { drawer.close() }
         }
@@ -168,12 +167,15 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
     LaunchedEffect(pending) { pending?.let { open(it.hostId, it.terminalId); consumed() } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
-        BackHandler(enabled = settings || (!wide && drawer.isOpen)) { if (settings) settings = false else scope.launch { drawer.close() } }
+        BackHandler(enabled = settings || (!wide && drawer.isOpen)) {
+            if (!wide && drawer.isOpen) scope.launch { drawer.close() }
+            else settingsStack = settingsStack.popSettings()
+        }
         val branches = rememberWorkspaceBranches(app.connections, workspaces, wide || drawer.isOpen)
         val drawerContent: @Composable () -> Unit = {
             Column(Modifier.width(300.dp).fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
-                    if (statuses.isEmpty()) TextButton(onClick = { settings = true; hostsVm.edit(null); scope.launch { drawer.close() } }) {
+                    if (statuses.isEmpty()) TextButton(onClick = { settingsStack = openSettings(SettingsPage.HOSTS); hostsVm.edit(null); scope.launch { drawer.close() } }) {
                         Icon(Icons.Default.Add, null); Text(stringResource(R.string.add_host))
                     }
                     statuses.forEach { status ->
@@ -221,8 +223,11 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
                     }
                     if (resting) restingAgents.forEach { row -> DrawerAgent(row, host == row.hostId && terminal == row.terminal.id, agentSpace(row), unread(row)) { open(row.hostId, row.terminal.id) } }
                 }
-                UpdateDrawerEntry(updates) { updatesOpen = true; scope.launch { drawer.close() } }
-                IconButton(onClick = { settings = true; scope.launch { drawer.close() } }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
+                IconButton(onClick = { settingsStack = openSettings(); scope.launch { drawer.close() } }) {
+                    BadgedBox(badge = { if (updateState.available != null) Badge() }) {
+                        Icon(Icons.Default.Settings, stringResource(R.string.settings))
+                    }
+                }
             }
         }
         // The store follows the selected terminal, including while settings covers it.
@@ -262,7 +267,11 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
                     } }
                 }
             } }
-            if (settings) Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.settings)) }, actions = { IconButton(onClick = { updatesOpen = true }) { Icon(Icons.Default.SystemUpdate, stringResource(R.string.updates)) }; NotificationPermissionAction() }, navigationIcon = { IconButton(onClick = { settings = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } }) }) { padding -> Box(Modifier.padding(padding)) { HostsScreen(hostsVm) } }
+            settingsStack.lastOrNull()?.let { page ->
+                SettingsScreen(page, hostsVm, updates,
+                    navigate = { settingsStack = settingsStack.pushSettings(it) },
+                    back = { settingsStack = settingsStack.popSettings() })
+            }
             }
         }
         if (wide) Row { Surface { drawerContent() }; Box(Modifier.weight(1f)) { content() } }
@@ -284,7 +293,7 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
                 val pane = tab.openingPane()
                 if (pane != null) open(hostId, pane.terminal.id)
                 else {
-                    emptiedSpace = null; host = hostId; terminal = null; selectedSpaceId = space.id; settings = false
+                    emptiedSpace = null; host = hostId; terminal = null; selectedSpaceId = space.id; settingsStack = emptyList()
                     preferences.edit { putString("host", hostId); remove("terminal"); putString("tab:$hostId:${space.id}", tab.id) }
                 }
             }
@@ -376,23 +385,4 @@ private fun DrawerAgent(row: ConsoleTerminal, selected: Boolean, subtitle: Strin
 private fun AgentMark(state: String?, unread: Boolean = false) {
     if (state == "blocked" || state == "error") Text("?", color = MaterialTheme.colorScheme.error)
     else if (state == "working" || (state == "done" && unread)) Box(Modifier.size(7.dp).background(statusColor(state), CircleShape))
-}
-
-@Composable
-private fun NotificationPermissionAction() {
-    val context = LocalContext.current
-    var explain by remember { mutableStateOf(false) }
-    IconButton(onClick = { explain = true }) { Icon(Icons.Default.Notifications, stringResource(R.string.notifications)) }
-    if (explain) AlertDialog(onDismissRequest = { explain = false }, title = { Text(stringResource(R.string.notifications)) },
-        text = { Text(stringResource(R.string.notification_permission_help)) },
-        confirmButton = { TextButton(onClick = {
-            explain = false
-            val activity = context as? MainActivity
-            if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && activity != null) {
-                activity.enableNotifications()
-            } else {
-                context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
-            }
-        }) { Text(stringResource(R.string.notification_enable)) } },
-        dismissButton = { TextButton(onClick = { explain = false }) { Text(stringResource(R.string.cancel)) } })
 }

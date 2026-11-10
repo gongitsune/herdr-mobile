@@ -72,7 +72,6 @@
     <string name="notification_title">%1$s・%2$s</string>
     <string name="notifications">通知</string>
     <string name="notification_permission_help">herdr が前面にある間、承認待ち・完了・エラーへの変化を通知します。通知をタップすると端末を開きます。</string>
-    <string name="notification_enable">有効化・設定</string>
     <string name="agents">エージェント</string>
     <string name="chat">チャット</string>
     <string name="chat_empty">会話メッセージはまだありません。</string>
@@ -227,4 +226,20 @@
     <string name="update_install_cancelled">インストールをキャンセルしました。</string>
     <string name="update_install_success">アップデートをインストールしました。</string>
     <string name="update_settings_failed">アップデート設定を読み込み・保存できませんでした。もう一度お試しください。</string>
+    <string name="settings_connection">接続</string>
+    <string name="settings_hosts">ホスト</string>
+    <string name="settings_host_count">%1$d 件のホスト</string>
+    <string name="settings_app">アプリ</string>
+    <string name="settings_about">このアプリについて</string>
+    <string name="settings_version">v%1$s</string>
+    <string name="settings_version_channel">v%1$s（%2$s）</string>
+    <string name="settings_repository">GitHub リポジトリ</string>
+    <string name="settings_licenses">サードパーティのライセンス</string>
+    <string name="settings_licenses_description">オープンソースソフトウェアのライセンス</string>
+    <string name="settings_licenses_failed">ライセンスを読み込めませんでした。</string>
+    <string name="settings_open_failed">この画面を開けませんでした。</string>
+    <string name="notification_allowed">許可されています</string>
+    <string name="notification_off">オフ</string>
+    <string name="notification_allow">許可する</string>
+    <string name="notification_system_settings">システムの通知設定を開く</string>
 </resources>

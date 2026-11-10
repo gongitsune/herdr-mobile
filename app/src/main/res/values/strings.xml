@@ -72,7 +72,6 @@
     <string name="notification_title">%1$s · %2$s</string>
     <string name="notifications">Notifications</string>
     <string name="notification_permission_help">Notify when an agent becomes blocked, done or encounters an error while herdr is open. Tap a notification to open its terminal.</string>
-    <string name="notification_enable">Enable / settings</string>
     <string name="agents">Agents</string>
     <string name="chat">Chat</string>
     <string name="chat_empty">No conversation messages yet.</string>
@@ -227,4 +226,20 @@
     <string name="update_install_cancelled">Installation cancelled.</string>
     <string name="update_install_success">Update installed.</string>
     <string name="update_settings_failed">Could not load or save update settings. Please try again.</string>
+    <string name="settings_connection">Connection</string>
+    <string name="settings_hosts">Hosts</string>
+    <string name="settings_host_count">Hosts: %1$d</string>
+    <string name="settings_app">App</string>
+    <string name="settings_about">About this app</string>
+    <string name="settings_version">v%1$s</string>
+    <string name="settings_version_channel">v%1$s (%2$s)</string>
+    <string name="settings_repository">GitHub repository</string>
+    <string name="settings_licenses">Third-party licenses</string>
+    <string name="settings_licenses_description">Open-source software notices</string>
+    <string name="settings_licenses_failed">Could not load license notices.</string>
+    <string name="settings_open_failed">Could not open this screen.</string>
+    <string name="notification_allowed">Allowed</string>
+    <string name="notification_off">Off</string>
+    <string name="notification_allow">Allow</string>
+    <string name="notification_system_settings">Open system notification settings</string>
 </resources>
