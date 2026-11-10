@@ -178,7 +178,7 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
                         }
                         if (expanded) {
                         workspaces.filter { it.hostId == status.host.id }.flatMap { it.spaces }.forEach { space ->
-                            Row(Modifier.padding(vertical = 4.dp).background(if (host == status.host.id && selectedSpace?.id == space.id) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, MaterialTheme.shapes.small), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier.padding(vertical = 4.dp).background(if (host == status.host.id && selectedSpace?.id == space.id) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, MaterialTheme.shapes.small).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.FolderOpen, null, Modifier.size(20.dp))
                                 Column(Modifier.weight(1f)
                                     .clickable { openSpace(status.host.id, space) }.padding(start = 8.dp, top = 8.dp, bottom = 8.dp)) {
