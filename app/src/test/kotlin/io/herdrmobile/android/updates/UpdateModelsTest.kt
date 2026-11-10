@@ -6,19 +6,20 @@ import org.junit.Test
 internal fun apk(name: String, size: Long = 123) = ReleaseAsset(name, size,
     "https://github.com/gongitsune/herdr-mobile/releases/download/nightly/$name")
 internal fun stableRelease(tag: String = "v0.2.0") = AppRelease(tag, assets = listOf(apk("herdr-mobile-$tag.apk")))
-internal fun nightlyRelease(code: Long = 42) = AppRelease("nightly", prerelease = true,
+// Example commit count, shared by local and CI builds of the same revision.
+internal fun nightlyRelease(code: Long = 19) = AppRelease("nightly", prerelease = true,
     assets = listOf(apk("herdr-mobile-0.1.0-$code-abcdef1.apk")))
 
 class UpdateModelsTest {
     @Test fun nightlyUsesVersionCodeAndShowsSha() {
         val release = nightlyRelease()
-        assertEquals(42L, assetVersionCode(release.assets.single().name))
-        assertEquals("abcdef1", findUpdate(release, UpdateChannel.NIGHTLY, "9.0.0", 41)?.shortSha)
-        assertNull(findUpdate(release, UpdateChannel.NIGHTLY, "0.0.1", 42))
-        assertNull(findUpdate(release, UpdateChannel.NIGHTLY, "0.0.1", 43))
+        assertEquals(19L, assetVersionCode(release.assets.single().name))
+        assertEquals("abcdef1", findUpdate(release, UpdateChannel.NIGHTLY, "9.0.0", 18)?.shortSha)
+        assertNull(findUpdate(release, UpdateChannel.NIGHTLY, "0.0.1", 19))
+        assertNull(findUpdate(release, UpdateChannel.NIGHTLY, "0.0.1", 20))
         assertNull(assetVersionCode("herdr-mobile-v0.2.0.apk"))
         assertNull(assetVersionCode("herdr-mobile-0.2.0-99999999999999999999999-abcdef1.apk"))
-        assertNull(assetVersionCode("other-0.2.0-42-abcdef1.apk"))
+        assertNull(assetVersionCode("other-0.2.0-19-abcdef1.apk"))
     }
     @Test fun stableUsesSemanticVersionAndIgnoresSameOrOlder() {
         assertNotNull(findUpdate(stableRelease("v0.10.0"), UpdateChannel.STABLE, "0.9.0", 999))

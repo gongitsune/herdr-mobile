@@ -1,0 +1,92 @@
+name: Release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag (e.g. v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-apk-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - name: Verify release tag
+        shell: bash
+        run: |
+          if [[ "$TAG" != v* ]] || ! git check-ref-format "refs/tags/$TAG"; then
+            echo '::error::Expected a valid release tag starting with v.'
+            exit 1
+          fi
+          tag_commit="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+          if [[ "$tag_commit" != "$(git rev-parse HEAD)" ]]; then
+            echo '::error::Checked-out commit does not match the release tag.'
+            exit 1
+          fi
+          gh release view "$TAG" > /dev/null
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare optional fixed debug signing key
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.DEBUG_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.DEBUG_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.DEBUG_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            umask 077
+            signing_path="$RUNNER_TEMP/herdr-debug.keystore"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$signing_path"
+            {
+              printf 'HERDR_DEBUG_KEYSTORE=%s\n' "$signing_path"
+              printf 'HERDR_DEBUG_KEYSTORE_PASSWORD=%s\n' "$KEYSTORE_PASSWORD"
+              printf 'HERDR_DEBUG_KEY_ALIAS=%s\n' "$KEY_ALIAS"
+              printf 'HERDR_DEBUG_KEY_PASSWORD=%s\n' "$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          else
+            echo 'Fixed signing secrets unavailable; using the default Android debug key.'
+          fi
+      - name: Download Gradle distribution (with retries)
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            ./gradlew --version && exit 0
+            echo "Gradle download failed (attempt $attempt); retrying in 30s"
+            sleep 30
+          done
+          exit 1
+      - name: Assemble and test release APK
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest
+      - name: Upload release APK
+        shell: bash
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/herdr-mobile-${TAG}.apk"
+          gh release upload "$TAG" "$RUNNER_TEMP/herdr-mobile-${TAG}.apk" --clobber
+      - name: Remove decoded signing key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/herdr-debug.keystore"

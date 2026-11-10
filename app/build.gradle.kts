@@ -4,6 +4,27 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
+
+fun gitOutput(vararg arguments: String): String? = runCatching {
+    val output = providers.exec {
+        workingDir(rootProject.projectDir)
+        commandLine("git", *arguments)
+        isIgnoreExitValue = true
+    }
+    if (output.result.get().exitValue == 0) output.standardOutput.asText.get().trim() else null
+}.getOrNull()
+
+if (providers.environmentVariable("CI").orNull.equals("true", ignoreCase = true) &&
+    gitOutput("rev-parse", "--is-shallow-repository") == "true"
+) {
+    throw GradleException("CI requires full git history for versionCode. Set actions/checkout fetch-depth: 0.")
+}
+
+val appVersionCode = providers.environmentVariable("HERDR_VERSION_CODE").orNull?.let { value ->
+    value.toIntOrNull()?.takeIf { it > 0 }
+        ?: throw GradleException("HERDR_VERSION_CODE must be a positive integer.")
+} ?: (gitOutput("rev-list", "--count", "HEAD")?.toIntOrNull()?.takeIf { it > 0 } ?: 1)
+
 android {
     namespace = "io.herdrmobile.android"
     compileSdk = 35
@@ -11,7 +32,7 @@ android {
         applicationId = "io.herdrmobile.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull()?.takeIf { it > 0 } ?: 1
+        versionCode = appVersionCode
         versionName = rootProject.file("version.txt").takeIf { it.isFile }?.readText()?.trim() ?: "0.0.0"
     }
     signingConfigs {

@@ -14,29 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  release-please:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-    steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
       version_name: ${{ steps.apk.outputs.version_name }}
+      version_code: ${{ steps.apk.outputs.version_code }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -85,9 +72,11 @@ jobs:
         run: |
           short_sha="${GITHUB_SHA:0:7}"
           version_name="$(tr -d '[:space:]' < version.txt)"
-          apk_name="herdr-mobile-${version_name}-${GITHUB_RUN_NUMBER}-${short_sha}.apk"
+          version_code="$(git rev-list --count HEAD)"
+          apk_name="herdr-mobile-${version_name}-${version_code}-${short_sha}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/$apk_name"
           echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
           echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
           echo "name=$apk_name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
@@ -99,28 +88,6 @@ jobs:
         if: always()
         shell: bash
         run: rm -f "$RUNNER_TEMP/herdr-debug.keystore"
-
-  release:
-    needs: [build, release-please]
-    if: needs.release-please.outputs.release_created == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: herdr-mobile-*
-          path: apk
-          merge-multiple: true
-      - name: Upload release APK
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
-        run: |
-          cp apk/*.apk "herdr-mobile-${RELEASE_TAG}.apk"
-          gh release upload "$RELEASE_TAG" "herdr-mobile-${RELEASE_TAG}.apk" --clobber
 
   nightly:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -140,6 +107,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.build.outputs.version_code }}
         run: |
           if gh release view nightly > /dev/null 2>&1; then
             gh release delete nightly --yes --cleanup-tag
@@ -151,5 +119,5 @@ jobs:
           gh release create nightly apk/*.apk \
             --target "$GITHUB_SHA" \
             --title 'Nightly' \
-            --notes "Version $VERSION_NAME (versionCode $GITHUB_RUN_NUMBER). Debug APK from commit $GITHUB_SHA." \
+            --notes "Version $VERSION_NAME (versionCode $VERSION_CODE). Debug APK from commit $GITHUB_SHA." \
             --prerelease

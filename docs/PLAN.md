@@ -177,15 +177,17 @@ staleTerminals は明示 close 後も新 snapshot まで保持される。app �
 
 - リポジトリ: `gongitsune/herdr-mobile`（現在は public）。作成・初回 push・Secrets 登録は Claude が Phase 2 レビュー後に行う。
 - `.github/workflows/android.yml`（codex-b 担当）:
-  - トリガ: push（main）, pull_request, workflow_dispatch。`ubuntu-latest`、`actions/setup-java`（temurin 21）、`android-actions/setup-android` または runner 同梱 SDK、`gradle/actions/setup-gradle`。
-  - `./gradlew :core-client:test :app:assembleDebug :app:lintDebug`（結合テストは CI では実行しない。HC_IT 未設定でスキップされること）。
+  - トリガ: push（main）, pull_request, workflow_dispatch。`ubuntu-latest`、`actions/setup-java`（temurin 21）、`android-actions/setup-android` または runner 同梱 SDK、`gradle/actions/setup-gradle`。checkout は `fetch-depth: 0`。
+  - `./gradlew :core-client:test :app:assembleDebug :app:lintDebug :app:testDebugUnitTest :terminal-emulator:testDebugUnitTest`（結合テストは CI では実行しない。HC_IT 未設定でスキップされること）。
   - APK を `actions/upload-artifact` で保存（名前に short SHA）。
-  - main への push 時は `nightly` pre-release を作り直して `herdr-mobile-<sha>.apk` を添付する（`softprops/action-gh-release` か `gh release`、`permissions: contents: write`）。
+  - main への push 時は `nightly` pre-release を作り直して `herdr-mobile-<versionName>-<versionCode>-<sha>.apk` を添付する（`gh release`、`permissions: contents: write`）。
+- `.github/workflows/release-please.yml` が main への push でリリース PR・タグ・GitHub Release を作り、`workflow_dispatch` で `release.yml` を起動する。`release.yml` は指定タグを full checkout し、APK をビルド・テストして `herdr-mobile-<tag>.apk` を添付する（Phase 14 追補）。
 - 署名: 上書きインストールできるよう固定の debug keystore を使う。
   - `app/build.gradle.kts` の debug signingConfig は環境変数 `HERDR_DEBUG_KEYSTORE`（パス）, `HERDR_DEBUG_KEYSTORE_PASSWORD`, `HERDR_DEBUG_KEY_ALIAS`, `HERDR_DEBUG_KEY_PASSWORD` があればそれを使い、無ければ Android 既定の debug 鍵。
   - CI では Secret `DEBUG_KEYSTORE_BASE64` などをデコードして上記環境変数に渡す。Secret が無い（fork PR 等）場合は既定鍵でビルドを続行。
   - keystore はリポジトリに入れない。ローカルの正本は `~/.config/herdr-mobile/debug.keystore`。
-- versionCode は CI で `GITHUB_RUN_NUMBER` を使う（無ければ 1）。
+- versionCode は CI・ローカルとも `git rev-list --count HEAD`（main のコミット数）。`HERDR_VERSION_CODE` があれば優先し、git が使えなければ 1。`CI=true` の shallow clone は `fetch-depth: 0` を案内して失敗させる。
+- ローカル用の `GITHUB_RUN_NUMBER>=1000` は不要。1000 以上の versionCode が入っている端末は一度アンインストールが必要。
 
 ## Phase 4: herdr-app 風 UI ＋ ターミナル ⇔ チャット切替
 
@@ -921,6 +923,19 @@ Morphe のように「アプリから新しい版を確認 → 変更点を見�
 4. **インストール**：`PackageInstaller` のセッション方式（`ACTION_INSTALL_PACKAGE` は使わない）。`REQUEST_INSTALL_PACKAGES` 権限を追加。`canRequestPackageInstalls()` が false なら「不明なアプリのインストール」設定（`ACTION_MANAGE_UNKNOWN_APP_SOURCES`、package URI 付き）へ案内し、戻ってきたら続行。結果は `PendingIntent`（BroadcastReceiver、`FLAG_MUTABLE`）で受け、`STATUS_PENDING_USER_ACTION` なら同梱の Intent で確認画面を出す。失敗（署名不一致＝ `STATUS_FAILURE_CONFLICT` など）は理由を日本語で表示（署名不一致なら「一度アンインストールが必要」）。
 5. **設定**：既存の設定の場所（なければドロワーの下部）に「アップデート」セクション：現在の版（versionName ＋ versionCode）、チャンネル（安定版／Nightly）、「起動時に確認」のオン／オフ（既定オン）、「今すぐ確認」。
 6. 文字列は values / values-ja。ネットワーク・PackageInstaller はインタフェースで包んで ViewModel を単体テスト（判定、チャンネル、6 時間の間引き、エラー時の扱い）。ビルド・テスト・lint を通す。
+
+### Phase 14 追補：ワークフローを分ける（ユーザー決定 2026-11-10、codex-b）
+上の「release-please は android.yml の 1 ジョブ」「versionCode = GITHUB_RUN_NUMBER」を次で置き換える。
+1. **versionCode = main のコミット数**（`git rev-list --count HEAD`）。ワークフローに依存せず単調増加、CI とローカルで同じ値。
+   - `app/build.gradle.kts`：`providers.exec` で取得。環境変数 `HERDR_VERSION_CODE` があればそれを優先（手動の逃げ道）。git が無いときは 1。
+   - **shallow clone では誤った小さい値になるので、`CI=true` かつ `git rev-parse --is-shallow-repository` が true ならビルドを失敗させる**（メッセージで `fetch-depth: 0` を案内）。
+   - `GITHUB_RUN_NUMBER` は versionCode にもう使わない。
+2. **ワークフロー 3 本**（すべての checkout は `fetch-depth: 0`）：
+   - `android.yml`：今のテスト・ビルド・lint・artifact・nightly のまま。release-please / release ジョブを削除。APK 名は `herdr-mobile-<versionName>-<versionCode>-<sha>.apk`（versionCode はコミット数。シェルでも同じコマンドで出す）。nightly のノートも versionCode をコミット数に。
+   - `release-please.yml`：`on: push: branches: [main]`、`permissions: contents: write, pull-requests: write, actions: write`、`concurrency` で直列化。release-please-action@v4 の後、`release_created == 'true'` なら `gh workflow run release.yml --ref "$TAG" -f tag="$TAG"`（`workflow_dispatch` は GITHUB_TOKEN からでも起動できる）。
+   - `release.yml`：`on: workflow_dispatch: inputs: tag (required)`。tag を checkout（`ref: ${{ inputs.tag }}`、fetch-depth 0）、tag が `v*` 形式かつ GitHub Release が存在することを確認、固定 debug 鍵の準備（android.yml と同じ手順）、`./gradlew :app:assembleDebug :app:testDebugUnitTest`、`herdr-mobile-<tag>.apk` を `gh release upload --clobber`、鍵の削除。`permissions: contents: write`。手動で再実行・再添付できること。
+3. アプリ：`findUpdate` の versionCode の読み方は名前の形式が同じなので変えない（テストの例の数字だけ見直す）。表示の「versionCode」はそのまま。
+4. `docs/RELEASING.md` と上の「CI / 配布」節の versionCode の記述を更新。ローカルビルドも同じ versionCode になる（以前のローカル用 `GITHUB_RUN_NUMBER>=1000` は不要。1000 以上の版が入っている端末は一度アンインストールが必要）旨を 1 行。
 
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。
