@@ -20,12 +20,14 @@ class TranscriptSourceTest {
     private val user="""{"type":"user","uuid":"u","parentUuid":null,"sessionId":"fixture-session","message":{"content":"Synthetic prompt"}}"""
     private val answer="""{"type":"assistant","uuid":"a","parentUuid":"u","sessionId":"fixture-session","message":{"id":"m","content":[{"type":"text","text":"Synthetic answer"}]}}"""
     @Test fun reopeningPublishesCachedProjectionBeforeAnyProbeAndReadsOnlyTheAppend():Unit=runBlocking {
-        for(kind in listOf(AgentKind.CLAUDE_CODE,AgentKind.CODEX)) withTimeout(6000) {
+        for(kind in listOf(AgentKind.CLAUDE_CODE,AgentKind.CODEX)) withTimeout(30000) {
             val metadata=if(kind==AgentKind.CLAUDE_CODE)
                 answer.replace("\"id\":\"m\",","\"id\":\"m\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":90000},")
             else """{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}"""
             val peer=TranscriptPeer((initialRows(kind)+metadata).joinToString("\n",postfix="\n"),kind,"working")
-            val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
+            // Queue source jobs on this test's event loop. Constructor-time cache assertions
+            // must run before any background append can replace the cached projection.
+            val scope=CoroutineScope(coroutineContext+SupervisorJob())
             val client=HcClient(TransportFactory { peer.peer },scope,autoReconnect=false)
             var source=TranscriptSource(client,"t1",scope)
             try {
@@ -34,6 +36,7 @@ class TranscriptSourceTest {
                 // Give the reader a substantial checkpoint, then reopen with additional bytes on disk.
                 peer.text.updateAndGet { it+"{}\n".repeat(2100) }
                 source.refresh()
+                val checkpointLine=peer.text.get().count { it=='\n' }.toLong()
                 val items=source.items.value
                 val activity=source.activity.value
                 val session=source.session.value
@@ -41,6 +44,7 @@ class TranscriptSourceTest {
                 val probes=peer.probes.get()
                 source.close()
                 peer.offsets.clear()
+                peer.peer.requests.clear()
                 peer.text.updateAndGet { it+liveRows(kind).first()+"\n" }
                 source=TranscriptSource(client,"t1",scope)
                 assertIs<TranscriptState.Ready>(source.state.value)
@@ -48,12 +52,22 @@ class TranscriptSourceTest {
                 assertEquals(activity,source.activity.value)
                 assertEquals(session,source.session.value)
                 assertEquals(probes,peer.probes.get())
-                withTimeout(750) { source.items.first { it.any { row -> row is ChatItem.Thinking } } }
-                assertEquals(probes,peer.probes.get(),"Reopening must not rerun the resolver before publishing/reading the cache")
+                source.items.first { it.any { row -> row is ChatItem.Thinking } }
+                // A slow observer may resume after a normal validation poll. Check RPC order
+                // at the cached append read, rather than racing the poll's current probe count.
+                val requests=peer.peer.requests.toList()
+                val appendRead=requests.indexOfFirst {
+                    FakeCoreTransport.method(it)=="file.read" && it["params"].obj()["limit"]?.jsonPrimitive?.int==2000
+                }
+                assertTrue(appendRead>=0,"Reopening must read the append")
+                assertFalse(requests.take(appendRead).any { FakeCoreTransport.method(it)=="machine.exec" },
+                    "Reopening must not rerun the resolver before publishing/reading the cache")
                 assertTrue(peer.offsets.isNotEmpty())
+                assertEquals(checkpointLine,peer.offsets.first(),"The first read must overlap the cached checkpoint line")
                 assertTrue(peer.offsets.all { it>2000 },"Restore the reader checkpoint, not just displayed rows")
+                val beforeRefresh=peer.probes.get()
                 source.refresh()
-                assertTrue(peer.probes.get()>probes,"Normal validation still runs after a cached reopen")
+                assertTrue(peer.probes.get()>beforeRefresh,"Normal validation still runs after a cached reopen")
                 peer.notStarted=true
                 source.refresh()
                 assertIs<TranscriptState.NotStarted>(source.state.value)
