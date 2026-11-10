@@ -38,6 +38,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.herdrmobile.android.HerdrApplication
 import io.herdrmobile.android.R
+import io.herdrmobile.android.BuildConfig
+import io.herdrmobile.android.updates.*
 import io.herdrmobile.android.connection.ConsoleTerminal
 import io.herdrmobile.android.notifications.TerminalDestination
 import io.herdrmobile.android.ui.hosts.*
@@ -52,6 +54,12 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestination?>, consumed: () -> Unit) {
+    val updates: UpdateViewModel = viewModel(factory = factory {
+        UpdateViewModel(app.updateSettings, app.updateNetwork, app.updateInstaller,
+            BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong(), claimStartupCheck = app::claimUpdateStartup)
+    })
+    var updatesOpen by rememberSaveable { mutableStateOf(false) }
+    UpdateDialogs(updates, updatesOpen) { updatesOpen = false }
     val preferences = LocalContext.current.getSharedPreferences("agent-screen", 0)
     var host by rememberSaveable { mutableStateOf(preferences.getString("host", null)) }
     var terminal by rememberSaveable { mutableStateOf(preferences.getString("terminal", null)) }
@@ -213,6 +221,7 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
                     }
                     if (resting) restingAgents.forEach { row -> DrawerAgent(row, host == row.hostId && terminal == row.terminal.id, agentSpace(row), unread(row)) { open(row.hostId, row.terminal.id) } }
                 }
+                UpdateDrawerEntry(updates) { updatesOpen = true; scope.launch { drawer.close() } }
                 IconButton(onClick = { settings = true; scope.launch { drawer.close() } }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
             }
         }
@@ -253,7 +262,7 @@ fun HerdrApp(app: HerdrApplication, pendingDestination: StateFlow<TerminalDestin
                     } }
                 }
             } }
-            if (settings) Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.settings)) }, actions = { NotificationPermissionAction() }, navigationIcon = { IconButton(onClick = { settings = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } }) }) { padding -> Box(Modifier.padding(padding)) { HostsScreen(hostsVm) } }
+            if (settings) Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.settings)) }, actions = { IconButton(onClick = { updatesOpen = true }) { Icon(Icons.Default.SystemUpdate, stringResource(R.string.updates)) }; NotificationPermissionAction() }, navigationIcon = { IconButton(onClick = { settings = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } }) }) { padding -> Box(Modifier.padding(padding)) { HostsScreen(hostsVm) } }
             }
         }
         if (wide) Row { Surface { drawerContent() }; Box(Modifier.weight(1f)) { content() } }

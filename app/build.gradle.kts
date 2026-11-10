@@ -7,7 +7,13 @@ plugins {
 android {
     namespace = "io.herdrmobile.android"
     compileSdk = 35
-    defaultConfig { applicationId = "io.herdrmobile.android"; minSdk = 26; targetSdk = 35; versionCode = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull()?.takeIf { it > 0 } ?: 1; versionName = "0.1.0" }
+    defaultConfig {
+        applicationId = "io.herdrmobile.android"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull()?.takeIf { it > 0 } ?: 1
+        versionName = rootProject.file("version.txt").takeIf { it.isFile }?.readText()?.trim() ?: "0.0.0"
+    }
     signingConfigs {
         getByName("debug") {
             val env = listOf("HERDR_DEBUG_KEYSTORE", "HERDR_DEBUG_KEYSTORE_PASSWORD", "HERDR_DEBUG_KEY_ALIAS", "HERDR_DEBUG_KEY_PASSWORD")
@@ -27,6 +33,7 @@ android {
 kotlin { jvmToolchain(21) }
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.coroutines.test)
     implementation(project(":terminal-view"))
     implementation(libs.compose.icons)
     implementation(libs.markdown.m3)

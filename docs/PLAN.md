@@ -175,7 +175,7 @@ staleTerminals は明示 close 後も新 snapshot まで保持される。app �
 
 ## CI / 配布（実機 adb が使えないため）
 
-- リポジトリ: `gongitsune/herdr-mobile`（private）。作成・初回 push・Secrets 登録は Claude が Phase 2 レビュー後に行う。
+- リポジトリ: `gongitsune/herdr-mobile`（現在は public）。作成・初回 push・Secrets 登録は Claude が Phase 2 レビュー後に行う。
 - `.github/workflows/android.yml`（codex-b 担当）:
   - トリガ: push（main）, pull_request, workflow_dispatch。`ubuntu-latest`、`actions/setup-java`（temurin 21）、`android-actions/setup-android` または runner 同梱 SDK、`gradle/actions/setup-gradle`。
   - `./gradlew :core-client:test :app:assembleDebug :app:lintDebug`（結合テストは CI では実行しない。HC_IT 未設定でスキップされること）。
@@ -885,6 +885,42 @@ class AgentCommandStore(client: HcClient, scope: CoroutineScope) : java.io.Close
 2. **Loading 中はチャット面にアニメーション**：対応エージェントで `Loading` の間はチャット面を出し、会話の場所に読み込みアニメーション（メッセージ形のスケルトンを薄く明滅させる、または中央に小さな進捗＋「会話を読み込み中…」）。入力欄は使える。ターミナルには切り替えない。
 3. **自動の面切り替えは一度だけ**：自動で面を変えるのは「Loading → Ready/NotStarted（チャット）」か「Loading → Unavailable/Failed（ターミナル）」のときだけ。ユーザーが選んだ面は、その端末を開いている間は自動で変えない。面の切り替えは 150ms 程度のクロスフェード。
 4. 単体テスト（種別未確定・Loading・キャッシュ済みの面での表示決定）。
+
+## Phase 14: release-please でリリース＋アプリ内アップデート（ユーザー指摘 2026-11-10）
+
+### 背景
+- 「Release please を使ってリリースできるようにして」「Morphe（ReVanced 系マネージャ）のようにアプリ側からアップデートできるようにして」。
+- リポジトリは **public**（`gongitsune/herdr-mobile`）。GitHub API は認証なしで読める（60 回/時。アプリにトークンは入れない）。
+- 今の配布は main への push ごとの `nightly` pre-release（固定 debug 鍵で署名、versionCode = `GITHUB_RUN_NUMBER`）。
+
+### 決定事項（Claude）
+- **署名はリリースも固定 debug 鍵のまま**（今入っている nightly から上書きできることを優先。正式な release 鍵は今回は作らない）。
+- **versionCode の連番を保つため、release-please は別ワークフローにせず `android.yml` の 1 ジョブにする**（run number はワークフローごとの連番なので、別ワークフローで作ると versionCode が巻き戻る）。
+- versionName の正本はリポジトリ直下の `version.txt`（release-please の `simple` 型が更新する）。
+- コミットは今後 Conventional Commits（`feat:` / `fix:` / `chore:` …）。コミットは Claude が行う。初回は `Release-As: 0.1.0` で v0.1.0 を出す。
+- リポジトリ設定「Actions が PR を作れる」は Claude が有効にする（`can_approve_pull_request_reviews=true`）。GITHUB_TOKEN が作った PR／タグでは他のワークフローが動かない点は許容（リリースの APK は同じ run で作るので問題ない）。
+
+### codex-b（CI / Gradle）
+1. `release-please-config.json`（`release-type: simple`、`package-name: herdr-mobile`、`include-component-in-tag: false`（タグは `v0.1.0`）、`bump-minor-pre-major: true`、`changelog-sections` は feat/fix/perf を表示、他は hidden）、`.release-please-manifest.json`（`{".": "0.1.0"}`）、`version.txt`（`0.1.0`）を追加。`bootstrap-sha` は現在の HEAD（`c044793`）。
+2. `app/build.gradle.kts`：versionName を `rootProject.file("version.txt")` から読む（前後の空白除去、無ければ `0.0.0`）。versionCode の扱いは今のまま。
+3. `android.yml`：
+   - `release-please` ジョブ（`googleapis/release-please-action@v4`、`if: github.event_name == 'push' && github.ref == 'refs/heads/main'`、`permissions: contents: write, pull-requests: write`、config/manifest のパス指定）。outputs に `release_created` と `tag_name`。
+   - 既存の `build` ジョブはそのまま（release-please を待たない）。APK 名は main への push で `herdr-mobile-<sha>.apk` のままでよいが、**versionCode を名前に入れる**：`herdr-mobile-<versionName>-<run_number>-<sha>.apk`。
+   - `release` ジョブ：`needs: [build, release-please]`、`if: needs.release-please.outputs.release_created == 'true'`。artifact を落として `herdr-mobile-<tag>.apk` という名前でそのリリースに `gh release upload`。
+   - `nightly` ジョブ：リリースが作られた run でも従来どおり作り直してよい。ノートに versionCode（run number）と versionName を書く。
+4. `docs/RELEASING.md`（短く）：Conventional Commits の書き方、release PR をマージするとタグ・Release・APK ができる流れ、`Release-As:` の使い方。
+
+### codex-b（app：アプリ内アップデート）
+Morphe のように「アプリから新しい版を確認 → 変更点を見る → ダウンロード → インストール」まで完結させる。
+1. **確認**：`https://api.github.com/repos/gongitsune/herdr-mobile/releases`（`Accept: application/vnd.github+json`、`User-Agent: herdr-mobile/<versionName>`）。
+   - チャンネル：**安定版**（既定。`prerelease=false` の最新 = `/releases/latest`）と **Nightly**（`nightly` タグ）。設定で切り替え、DataStore に保存。
+   - 新しいかの判定は **versionCode** で行う：APK アセット名 `herdr-mobile-…-<versionCode>-…apk` から数字を取る（安定版は `herdr-mobile-v0.1.0.apk` なので、安定版は semver を `BuildConfig.VERSION_NAME` と比べ、同じなら更新なし）。判定は純粋関数にして単体テスト。
+   - いつ確認するか：アプリ起動時に 1 回（前回確認から 6 時間以上経っていれば）と、手動の「アップデートを確認」。失敗（オフライン、レート制限 403/429）は静かに無視し、手動のときだけ短いメッセージ。
+2. **知らせる**：新しい版があればドロワーの下部（または設定の入口付近）に目立たない「アップデートがあります（v0.2.0）」の行。タップで下からのシート：版、公開日、リリースノート（`body` を既存の markdown-m3 で表示）、「ダウンロードしてインストール」ボタン、Nightly のときは commit の短い SHA。
+3. **ダウンロード**：OkHttp 等は足さず `HttpURLConnection` でよい（リダイレクト追従）。`cacheDir/updates/` に保存、進捗バーを出す、キャンセル可、サイズが `asset.size` と一致することを確認。古い APK は消す。
+4. **インストール**：`PackageInstaller` のセッション方式（`ACTION_INSTALL_PACKAGE` は使わない）。`REQUEST_INSTALL_PACKAGES` 権限を追加。`canRequestPackageInstalls()` が false なら「不明なアプリのインストール」設定（`ACTION_MANAGE_UNKNOWN_APP_SOURCES`、package URI 付き）へ案内し、戻ってきたら続行。結果は `PendingIntent`（BroadcastReceiver、`FLAG_MUTABLE`）で受け、`STATUS_PENDING_USER_ACTION` なら同梱の Intent で確認画面を出す。失敗（署名不一致＝ `STATUS_FAILURE_CONFLICT` など）は理由を日本語で表示（署名不一致なら「一度アンインストールが必要」）。
+5. **設定**：既存の設定の場所（なければドロワーの下部）に「アップデート」セクション：現在の版（versionName ＋ versionCode）、チャンネル（安定版／Nightly）、「起動時に確認」のオン／オフ（既定オン）、「今すぐ確認」。
+6. 文字列は values / values-ja。ネットワーク・PackageInstaller はインタフェースで包んで ViewModel を単体テスト（判定、チャンネル、6 時間の間引き、エラー時の扱い）。ビルド・テスト・lint を通す。
 
 ## 担当範囲（衝突防止）
 - codex-a: `core-client/**` のみ。
