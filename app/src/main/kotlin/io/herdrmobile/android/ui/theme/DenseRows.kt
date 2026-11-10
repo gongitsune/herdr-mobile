@@ -9,16 +9,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import io.herdrmobile.android.R
 import io.herdrmobile.core.workspace.AgentKind
 
 @Composable
-fun ProgramAvatar(kind: AgentKind?) {
+fun ProgramAvatar(kind: AgentKind?, size: Dp = 36.dp) {
     if (kind == AgentKind.CLAUDE_CODE) {
-        ProgramIcon(kind, Modifier.size(36.dp))
+        ProgramIcon(kind, Modifier.size(size))
     } else {
         Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.secondaryContainer) {
-            ProgramIcon(kind, Modifier.padding(8.dp).size(20.dp))
+            ProgramIcon(kind, Modifier.padding(size * (8f / 36f)).size(size * (20f / 36f)))
         }
     }
 }

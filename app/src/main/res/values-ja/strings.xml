@@ -242,4 +242,9 @@
     <string name="notification_off">オフ</string>
     <string name="notification_allow">許可する</string>
     <string name="notification_system_settings">システムの通知設定を開く</string>
+    <plurals name="tree_more_agents">
+        <item quantity="other">+%1$d 件</item>
+    </plurals>
+    <string name="expand_space">%1$s を展開</string>
+    <string name="collapse_space">%1$s を折りたたむ</string>
 </resources>

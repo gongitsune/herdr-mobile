@@ -242,4 +242,10 @@
     <string name="notification_off">Off</string>
     <string name="notification_allow">Allow</string>
     <string name="notification_system_settings">Open system notification settings</string>
+    <plurals name="tree_more_agents">
+        <item quantity="one">+%1$d more</item>
+        <item quantity="other">+%1$d more</item>
+    </plurals>
+    <string name="expand_space">Expand %1$s</string>
+    <string name="collapse_space">Collapse %1$s</string>
 </resources>
